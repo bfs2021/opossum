@@ -2674,7 +2674,7 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 			Entrypoint:        svc.Entrypoint,
 			EntrypointCleared: svc.EntrypointCleared,
 			ImageIsBuilt:      svc.Build != nil,
-			Labels:            append(append([]string(nil), svc.Labels...), projectLabel+"="+o.Project.Name),
+			Labels:            append(o.labelsTheRuntimeTakes(name, svc.Labels), projectLabel+"="+o.Project.Name),
 			Memory:            mem,
 			CPUs:              cpu,
 			Detach:            detach,
@@ -8061,7 +8061,7 @@ func (o *Orchestrator) RunOneOff(service string, command []string, opts RunOneOf
 		Entrypoint:        svc.Entrypoint,
 		EntrypointCleared: svc.EntrypointCleared,
 		ImageIsBuilt:      svc.Build != nil,
-		Labels:            append(append([]string(nil), svc.Labels...), projectLabel+"="+o.Project.Name),
+		Labels:            append(o.labelsTheRuntimeTakes(service, svc.Labels), projectLabel+"="+o.Project.Name),
 		Memory:            mem,
 		CPUs:              cpu,
 		Detach:            false, // foreground / attached

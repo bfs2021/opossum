@@ -6,6 +6,18 @@ All notable changes to opossum are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-10-13
+
+### Changed
+
+- A `pid: service:<name>` or `ipc: service:<name>` is now a dependency of the service, as it is for docker compose (and as `network_mode: service:<name>` and `links:` already were): `up` starts the named service first, an undefined target is refused at load, and a dependency cycle through them is a cycle.
+
+### Fixed
+
+- A boolean key written as a YAML alias (`*k : !override true`, `*k : "True"`) is read as the key it names, as docker compose reads it, instead of being refused with `cannot unmarshal !!str into bool`; and an alias whose name happens to be a boolean key's (`x-k: &tty hostname`, `*tty : maybe`) is no longer read as that key. This covers `init`, `tty` and `read_only` on a service, a long-form volume's `read_only` and `nocopy`, a network's `internal`, an `env_file` entry's `required` and a healthcheck's `disable`.
+- A network's `attachable`, `enable_ipv4` and `enable_ipv6` are held to the type of a boolean, as its `internal` is and as docker compose holds them: a word that is not one, a number, a list, a mapping or a key with nothing after it is refused at load instead of being read past. `'yes'`, `"True"` and `!override true` are read as the booleans they are, also where the value is written as a YAML alias or the key is brought in by a `<<` (for these three keys and for `internal`, `init`, `tty`, `read_only` and the other booleans a word may be written for), and the word an anchor holds is left as it is wherever else it is read.
+- `up` and `run` no longer stop on a service label whose value holds a second `=` or ends in `==` (a reverse proxy's `forwardauth.address=http://auth/verify?rd=https://…`, a base64 value). Apple `container` 1.5.0 refuses such a label (`invalid label format`), so `up` started nothing; the label is now left out and named in a note (by its key, never its value, since a value can be a token), and the service starts.
+
 ## [0.45.0] - 2026-10-10
 
 ### Fixed
@@ -2886,7 +2898,8 @@ First tagged release. Everything opossum can do so far.
 - `restart` reassigns a container's IP (the runtime does this on `start`); the
   name and config are preserved, so name-based discovery is unaffected.
 
-[Unreleased]: https://github.com/suruseas/opossum/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/suruseas/opossum/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/suruseas/opossum/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/suruseas/opossum/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/suruseas/opossum/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/suruseas/opossum/compare/v0.42.1...v0.43.0

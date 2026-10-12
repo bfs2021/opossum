@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,6 +33,23 @@ func dockerHolding(t *testing.T, have map[string]time.Duration) (bin, log string
 		t.Fatal(err)
 	}
 	return bin, log
+}
+
+// writeSilentDocker writes a docker stand-in at bin that logs what it is asked (to log, if there is one) and then does not answer for 30 s, and runs it once with
+// `warm` so that its first execution — which on a Mac that has just been given a new executable can take over half a second, longer than the probe waits — is paid
+// here and not inside the wait the test measures (#2049).
+func writeSilentDocker(t *testing.T, bin, log string) {
+	t.Helper()
+	body := "#!/bin/sh\n[ \"$1\" = warm ] && exit 0\n"
+	if log != "" {
+		body += "echo \"$*\" >> '" + log + "'\n"
+	}
+	if err := os.WriteFile(bin, []byte(body+"exec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command(bin, "warm").Run(); err != nil {
+		t.Fatalf("warming the docker stand-in: %v", err)
+	}
 }
 
 func dockerCalls(t *testing.T, log string) []string {
@@ -90,9 +108,7 @@ func TestUpSaysNothingWhenDockerCannotBeAskedOrHasNoSuchImage(t *testing.T) {
 		}},
 		{"the daemon does not answer in time", func(t *testing.T, rt *runtime.Runtime) {
 			bin := filepath.Join(t.TempDir(), "docker")
-			if err := os.WriteFile(bin, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
-				t.Fatal(err)
-			}
+			writeSilentDocker(t, bin, "")
 			rt.DockerBin = bin
 			rt.DockerProbeTimeout = 300 * time.Millisecond
 		}},
@@ -213,9 +229,7 @@ func TestUpDoesNotWaitForADockerThatDidNotAnswerOnceForEachService(t *testing.T)
 	dir := t.TempDir()
 	log := filepath.Join(dir, "asked.log")
 	bin := filepath.Join(dir, "docker")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho \"$*\" >> '"+log+"'\nexec sleep 30\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeSilentDocker(t, bin, log)
 	rt.DockerBin = bin
 	rt.DockerProbeTimeout = 400 * time.Millisecond
 	svcs := map[string]*compose.Service{}
@@ -244,9 +258,7 @@ func TestEachUpAsksADockerThatDidNotAnswerOnceMore(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "asked.log")
 	bin := filepath.Join(dir, "docker")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho \"$*\" >> '"+log+"'\nexec sleep 30\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeSilentDocker(t, bin, log)
 	rt.DockerBin = bin
 	rt.DockerProbeTimeout = 300 * time.Millisecond
 	p := project("pj", map[string]*compose.Service{

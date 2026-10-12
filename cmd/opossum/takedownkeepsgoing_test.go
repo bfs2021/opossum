@@ -52,7 +52,7 @@ func TestAProjectIsTakenDownWhateverKeyTheRefusalIsAbout(t *testing.T) {
 		{
 			"a service nothing takes in the extended file has a healthcheck disable that is a word, written by an alias key",
 			map[string]string{"compose.yaml": "name: demo\nservices:\n  s:\n    extends: {file: base.yaml, service: b}\n", "base.yaml": "x-d: &d disable\nservices:\n  b: {image: alpine:latest}\n  u:\n    image: alpine:latest\n    healthcheck:\n      *d : abc\n"},
-			"s.demo.opossum", `cannot unmarshal !!str into bool`, "",
+			"s.demo.opossum", `healthcheck.disable must be true or false`, "",
 		},
 		{
 			"a service the extends takes gives deploy as a list",

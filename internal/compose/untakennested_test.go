@@ -16,44 +16,19 @@ var valuesWithNothingInThem = map[string]string{
 	"listlistnull": "[[~]]", "nulllist": "[~, 1]", "listbool": "[true]",
 }
 
+// knownDifferencesNothing are the cells of the sweep where docker compose v5.5.1 and opossum still differ (measured: `config -q`, rc 1 and 0). The dates for the
+// numbers and booleans, `models: {a: ~}`, and the lists of mappings with nothing in them of `configs` and `secrets` read as docker compose reads them now (#1963); what is
+// left is a list of `configs` or `secrets` with nothing as an item, a `devices` list of mappings, in a service that is not taken, and a date for `dns` and `dns_search`
+// (docker compose puts the values of the files together in a list and reads the date then, which the merge here does not: see datesRefused).
 var knownDifferencesNothing = map[string]bool{
-	"configs/not taken/listmapnull": true,
 	"configs/not taken/listnull":    true,
-	"cpu_count/taken/date":          true,
-	"cpu_count/taken/ts":            true,
-	"cpu_percent/taken/date":        true,
-	"cpu_percent/taken/ts":          true,
-	"cpu_period/taken/date":         true,
-	"cpu_period/taken/ts":           true,
-	"cpu_quota/taken/date":          true,
-	"cpu_quota/taken/ts":            true,
-	"cpu_rt_period/taken/date":      true,
-	"cpu_rt_period/taken/ts":        true,
-	"cpu_rt_runtime/taken/date":     true,
-	"cpu_rt_runtime/taken/ts":       true,
-	"cpu_shares/taken/date":         true,
-	"cpu_shares/taken/ts":           true,
 	"devices/not taken/listmap":     true,
 	"devices/not taken/listmapnull": true,
 	"dns/taken/date":                true,
 	"dns/taken/ts":                  true,
 	"dns_search/taken/date":         true,
 	"dns_search/taken/ts":           true,
-	"models/taken/mapnull":          true,
-	"oom_kill_disable/taken/date":   true,
-	"oom_kill_disable/taken/ts":     true,
-	"oom_score_adj/taken/date":      true,
-	"oom_score_adj/taken/ts":        true,
-	"pids_limit/taken/date":         true,
-	"pids_limit/taken/ts":           true,
-	"privileged/taken/date":         true,
-	"privileged/taken/ts":           true,
-	"scale/taken/date":              true,
-	"scale/taken/ts":                true,
-	"secrets/not taken/listmapnull": true,
 	"secrets/not taken/listnull":    true,
-	"stdin_open/taken/date":         true,
-	"stdin_open/taken/ts":           true,
 }
 
 func TestAListOrAMappingWithNothingInItIsReadAsDockerComposeReadsItInAServiceNothingTakes(t *testing.T) {

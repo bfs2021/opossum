@@ -171,6 +171,8 @@ type Service struct {
 	GroupAddWritten []string        `yaml:"-"`
 	GroupAdd        GroupAdd        `yaml:"group_add"`    // one numeric supplementary group → --gid (the shapes the runtime cannot take are refused before anything starts)
 	NetworkMode     string          `yaml:"network_mode"` // only "none" acted on: full network isolation (--network none)
+	Pid             NamespaceRef    `yaml:"pid"`          // only a `service:<name>` is read: docker compose orders and holds it as a dependency (LinkedNames); the namespace itself is not shared
+	Ipc             NamespaceRef    `yaml:"ipc"`          // the same for `ipc: service:<name>`
 	MacAddress      string          `yaml:"mac_address"`  // the container's MAC on its first network (`--network <name>,mac=…`)
 	Labels          Labels          `yaml:"labels"`       // put on the container as `-l key=value`, before opossum's own labels (which win on a clash, as docker compose's own do)
 	Networks        ServiceNetworks `yaml:"networks"`     // declared networks this service joins (one --network each; aliases/static IPs not applied)
@@ -1174,8 +1176,11 @@ func nestedNode(n yaml.Node, path ...string) (*yaml.Node, bool) {
 // after them (measured on v5.5.0, every field the Service struct reads):
 // `command:` and `entrypoint:` mean "no command" (and the -f merge reads them
 // so, see nullIsAValue); `deploy:` and `develop:` are mappings it lets be
-// empty; the `x-` extension is the project's own and is never validated.
-var bareKeyIsAllowed = map[string]bool{"command": true, "entrypoint": true, "deploy": true, "develop": true, "x-opossum-mcp-tools": true}
+// empty; `pid:` and `ipc:` are kept out of the generic refusal below so that a bare one is
+// refused by the schema's words (`ipc must be a string`, as docker compose says it; docker
+// compose panics on `pid: ~`, a known difference); the `x-` extension is the project's own
+// and is never validated.
+var bareKeyIsAllowed = map[string]bool{"command": true, "entrypoint": true, "deploy": true, "develop": true, "pid": true, "ipc": true, "x-opossum-mcp-tools": true}
 
 // fieldShape says, for the refusal of a bare key, what the field takes — in
 // the words docker compose uses for the same file ("must be a array" and so
@@ -1450,6 +1455,12 @@ func (s *Service) UnmarshalYAML(value *yaml.Node) error {
 			return unknownKeyErr("", k)
 		}
 		s.Unsupported = append(s.Unsupported, k)
+	}
+	// `pid` and `ipc` have a field (the `service:<name>` they may name is a dependency), but the namespace is not shared: still listed as ignored.
+	for _, k := range []string{"ipc", "pid"} {
+		if _, ok := keys[k]; ok {
+			s.Unsupported = append(s.Unsupported, k)
+		}
 	}
 	// The mappings opossum reads only part of — `deploy` (resources.limits),
 	// `build`, `healthcheck`, `develop` — name each key they carry that
@@ -2543,11 +2554,15 @@ type (
 		Name     string    `yaml:"name"`
 	}
 	rawNetworkDecl struct {
-		Internal bool      `yaml:"internal"`
-		External yaml.Node `yaml:"external"`
-		Name     string    `yaml:"name"`
-		Labels   Labels    `yaml:"labels"`
-		IPAM     IPAM      `yaml:"ipam"`
+		Internal bool `yaml:"internal"`
+		// Read to be held to the type docker compose holds them to (a boolean; not acted on).
+		Attachable bool      `yaml:"attachable"`
+		EnableIPv4 bool      `yaml:"enable_ipv4"`
+		EnableIPv6 bool      `yaml:"enable_ipv6"`
+		External   yaml.Node `yaml:"external"`
+		Name       string    `yaml:"name"`
+		Labels     Labels    `yaml:"labels"`
+		IPAM       IPAM      `yaml:"ipam"`
 	}
 	rawSecret struct {
 		File     string    `yaml:"file"`
@@ -2709,13 +2724,13 @@ func (d *NetworkDecl) UnmarshalYAML(value *yaml.Node) error {
 	if err := wantMapping(value, "NetworkDecl"); err != nil {
 		return err
 	}
-	if err := bareKeysIn("a network's declaration", value, "internal", "name", "driver", "ipam"); err != nil {
+	if err := bareKeysIn("a network's declaration", value, "internal", "attachable", "enable_ipv4", "enable_ipv6", "name", "driver", "ipam"); err != nil {
 		return err
 	}
 	if err := refuseNonStringDeclKeys("a network's declaration", value, "name", "driver"); err != nil {
 		return err
 	}
-	if err := readQuotedBools(value, "internal"); err != nil {
+	if err := readQuotedBools(value, "internal", "attachable", "enable_ipv4", "enable_ipv6"); err != nil {
 		return fmt.Errorf("a network's declaration: %w", err)
 	}
 	var raw rawNetworkDecl
@@ -3674,15 +3689,33 @@ func readQuotedBools(n *yaml.Node, keys ...string) error {
 		return nil
 	}
 	for i := 0; i+1 < len(n.Content); i += 2 {
-		k := n.Content[i].Value
+		key := unalias(n.Content[i])
+		if key.ShortTag() == "!!merge" || key.Value == "<<" {
+			if err := readQuotedBoolsMerged(n, i+1, keys); err != nil {
+				return err
+			}
+			continue
+		}
+		k := key.Value
 		if !slices.Contains(keys, k) {
 			continue
 		}
-		v := n.Content[i+1]
+		orig := n.Content[i+1]
+		v := unalias(orig)
 		if v.Kind != yaml.ScalarNode || v.ShortTag() == "!!null" {
 			continue
 		}
 		b, ok := boolWord(v.Value)
+		if v != orig {
+			// A value written as an alias is the word its anchor holds, and the anchor may be read elsewhere as the string it is: the boolean is
+			// put in a copy in its place. One that is not a word is left to the struct decode, which refuses it in YAML's words.
+			if ok {
+				c := *v
+				c.Tag, c.Value, c.Style, c.Anchor = "!!bool", strconv.FormatBool(b), 0, ""
+				n.Content[i+1] = &c
+			}
+			continue
+		}
 		if !ok {
 			got := "a word that is not one"
 			if w := nonStringWord(v); w != "" {
@@ -3690,7 +3723,66 @@ func readQuotedBools(n *yaml.Node, keys ...string) error {
 			}
 			return fmt.Errorf("%s must be true or false, got %s (line %d) — write `true` or `false`", k, got, v.Line)
 		}
-		v.Tag, v.Value, v.Style = "!!bool", strconv.FormatBool(b), 0
+		// In a copy: the node may be a child of a mapping that a `<<` copied, which is the anchor's own.
+		c := *v
+		c.Tag, c.Value, c.Style = "!!bool", strconv.FormatBool(b), 0
+		n.Content[i+1] = &c
+	}
+	return nil
+}
+
+// mergeHoldsAny is whether the mapping (or the list of mappings) a `<<` brings in has one of keys, itself or through a `<<` of its own.
+func mergeHoldsAny(n *yaml.Node, keys []string) bool {
+	n = unalias(n)
+	switch n.Kind {
+	case yaml.SequenceNode:
+		for _, e := range n.Content {
+			if mergeHoldsAny(e, keys) {
+				return true
+			}
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			key := unalias(n.Content[i])
+			if key.ShortTag() == "!!merge" || key.Value == "<<" {
+				if mergeHoldsAny(n.Content[i+1], keys) {
+					return true
+				}
+			} else if slices.Contains(keys, key.Value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readQuotedBoolsMerged reads the booleans of the mapping (or the mappings of the list) a `<<` brings in, in a copy of it in the merge's place: the anchor it
+// names may be merged or read elsewhere, where the same key is not a boolean.
+func readQuotedBoolsMerged(n *yaml.Node, at int, keys []string) error {
+	target := unalias(n.Content[at])
+	// Only what holds one of the keys is copied: an alias left an alias is decoded once however often it is used, and a copy is decoded at each use.
+	if !mergeHoldsAny(target, keys) {
+		return nil
+	}
+	switch target.Kind {
+	case yaml.MappingNode:
+		clone := *target
+		clone.Content = append([]*yaml.Node(nil), target.Content...)
+		clone.Anchor = ""
+		if err := readQuotedBools(&clone, keys...); err != nil {
+			return err
+		}
+		n.Content[at] = &clone
+	case yaml.SequenceNode:
+		clone := *target
+		clone.Content = append([]*yaml.Node(nil), target.Content...)
+		clone.Anchor = ""
+		for j := range clone.Content {
+			if err := readQuotedBoolsMerged(&clone, j, keys); err != nil {
+				return err
+			}
+		}
+		n.Content[at] = &clone
 	}
 	return nil
 }
@@ -4371,14 +4463,27 @@ func kindName(k yaml.Kind) string {
 // pass decodes into is not addressable.
 func ptr(n yaml.Node) *yaml.Node { return &n }
 
-// LinkedNames are the services this one depends on without a `depends_on` for them: those `links:` lists and the one
-// `network_mode: service:<name>` names. docker compose reads both as `depends_on: {<name>: {condition: service_started,
+// LinkedNames are the services this one depends on without a `depends_on` for them: those `links:` lists and the ones the
+// `service:<name>` of `network_mode`, `pid` and `ipc` name. docker compose reads each as `depends_on: {<name>: {condition: service_started,
 // required: true}}` (measured, v5.5.1: an undefined or profile-gated target is refused as one, and a cycle is a dependency
 // cycle), so they are held to the same rules and put in the same order.
 func (s *Service) LinkedNames() []string {
 	names := append([]string(nil), s.Linked...)
-	if target, ok := strings.CutPrefix(s.NetworkMode, "service:"); ok && !slices.Contains(names, target) {
-		names = append(names, target)
+	for _, mode := range []string{s.NetworkMode, string(s.Pid), string(s.Ipc)} {
+		if target, ok := strings.CutPrefix(mode, "service:"); ok && !slices.Contains(names, target) {
+			names = append(names, target)
+		}
 	}
 	return names
+}
+
+// NamespaceRef is the value of `pid:` or `ipc:`. Only a scalar is kept (for the `service:<name>` it may name); a list or a mapping reads as
+// nothing, as the key was read before it had a field.
+type NamespaceRef string
+
+func (n *NamespaceRef) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		*n = NamespaceRef(node.Value)
+	}
+	return nil
 }

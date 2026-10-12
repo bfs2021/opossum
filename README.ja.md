@@ -11,7 +11,7 @@ Apple の `container` はコンテナを 1 個ずつ起動します——compose
 Docker Compose ファイル（`docker-compose.yml`）を読み、オープンな [Compose 仕様](https://compose-spec.io) のサブセットを実装しています。サービスはプロジェクトごとの共有ネットワーク上で依存関係の順に起動し、互いを名前で解決できます。macOS 26 以降と [Apple `container`](https://github.com/apple/container) が前提です。
 
 <!-- compat-figures -->
-実運用の compose プロジェクト 156 本での実測：無改変で完走 61 本（39%）、`--from-docker-compose` を付けて 78 本（50%）、悪化 0 本。方法と、まだ何が邪魔をしているかの内訳は [measured compatibility](docs/compatibility.md)（英語）にあります。
+実運用の compose プロジェクト 156 本での実測：無改変で完走 52 本（33%）、`--from-docker-compose` を付けて 66 本（42%）、悪化 0 本。方法と、まだ何が邪魔をしているかの内訳は [measured compatibility](docs/compatibility.md)（英語）にあります。
 <!-- /compat-figures -->
 
 > **これは英語版 [README.md](README.md) の日本語訳です。** 内容の正本は英語版で、細部で差が出た場合は英語版が優先されます。
@@ -26,8 +26,8 @@ Docker Compose ファイル（`docker-compose.yml`）を読み、オープンな
 
 **1. 実運用の compose ファイルで測ってある。**
 [Compose-Examples](https://github.com/Haxxnet/Compose-Examples) の自己ホスト用
-プロジェクト 156 本を無改変で実行：無改変のまま完走が 61 本（39%）、
-`--from-docker-compose` を付けて 78 本（50%）、悪化 0 本。opossum が診断できた失敗は、
+プロジェクト 156 本を無改変で実行：無改変のまま完走が 52 本（33%）、
+`--from-docker-compose` を付けて 66 本（42%）、悪化 0 本。opossum が診断できた失敗は、
 生のランタイムエラーではなく診断コードと対処の提案として報告されます。
 [方法・母数・内訳（英語）→](docs/compatibility.md)
 
@@ -35,7 +35,7 @@ Docker Compose ファイル（`docker-compose.yml`）を読み、オープンな
 `container` に必要な調整——データディレクトリを named volume にする、Postgres の
 `PGDATA` をサブディレクトリへ移す——を `compose.opossum.yaml` に書き出し、それを
 マージした状態でプロジェクトを起動します。**あなたの compose ファイルは変更しません。**
-39% → 50% の差はここから来ていて、これをやる道具は他にありません。
+33% → 42% の差はここから来ていて、これをやる道具は他にありません。
 
 **3. 何も動いていないときは、何も動いていない。** Docker Desktop は常駐の Linux VM を
 1つ抱えますが、Apple `container` はコンテナごとに VM を与え、待機時には1つも抱えません。

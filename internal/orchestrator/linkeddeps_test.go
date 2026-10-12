@@ -11,11 +11,13 @@ import (
 	"github.com/suruseas/opossum/internal/orchestrator"
 )
 
-// `up a` starts what `a` links to first, and brings it along, as docker compose does (`links:` and `network_mode: service:` are dependencies, #1802).
+// `up a` starts what `a` links to first, and brings it along, as docker compose does (`links:` and `network_mode`, `pid` and `ipc: service:` are dependencies, #1802).
 func TestUpStartsWhatAServiceLinksToFirst(t *testing.T) {
 	for _, tc := range []struct{ name, extra string }{
 		{"links", "    links: [\"b:alias\"]\n"},
 		{"network_mode service", "    network_mode: service:b\n"},
+		{"pid service", "    pid: service:b\n"},
+		{"ipc service", "    ipc: service:b\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
