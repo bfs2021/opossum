@@ -91,6 +91,13 @@ jobs:
     # expression lands if that ever stops being true, not that landing there
     # is as good.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "Linux", "X64"]') || 'ubuntu-latest' }}
+    # The longest job measured (of about 600 recent runs) took 17 minutes;
+    # the default limit is 360, so a hung test run would hold the one runner
+    # for hours. 45 is about two and a half times the longest, and `go test`
+    # has its own per-package timeout inside it. The limit counts from the job
+    # starting on a runner, not from the queue; it applies to the hosted
+    # runner of the published copy too, whose duration is not measured here.
+    timeout-minutes: 45
     # The compiler each section installed is the compiler it uses. Left to
     # itself, go reads the `toolchain` line in go.mod and downloads a different
     # one — so the section set up with the version go.mod asks for would
@@ -517,10 +524,10 @@ jobs:
       # but only when the file is more than an hour old, so a file whose mtime
       # is more than 180 minutes old was last used at least 120 minutes ago
       # (not "three hours ago"): not a file a running job can be holding when
-      # a run takes a quarter of an hour. The limit of that reasoning: a job
-      # has no `timeout-minutes` (the default is 360), so one stalled for more
-      # than two hours can have files taken from under it, and it is a job
-      # that has failed already. The same goes for a job that fails before the
+      # a run takes under twenty minutes. The reasoning reaches as far as a
+      # job that stalls, and a job stops at its `timeout-minutes` (45), well
+      # inside the two hours, so no running job can have files taken from
+      # under it. A job that fails before the
       # checkout: there is no script to run, this step is red too, and the job
       # was red before it.
       #
@@ -546,6 +553,8 @@ jobs:
   stable:
     # The same switch as the job above, for the same reason.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "Linux", "X64"]') || 'ubuntu-latest' }}
+    # The same limit as the job above, for the same reason.
+    timeout-minutes: 45
     env:
       GOTOOLCHAIN: local
     steps:
@@ -639,10 +648,10 @@ jobs:
       # but only when the file is more than an hour old, so a file whose mtime
       # is more than 180 minutes old was last used at least 120 minutes ago
       # (not "three hours ago"): not a file a running job can be holding when
-      # a run takes a quarter of an hour. The limit of that reasoning: a job
-      # has no `timeout-minutes` (the default is 360), so one stalled for more
-      # than two hours can have files taken from under it, and it is a job
-      # that has failed already. The same goes for a job that fails before the
+      # a run takes under twenty minutes. The reasoning reaches as far as a
+      # job that stalls, and a job stops at its `timeout-minutes` (45), well
+      # inside the two hours, so no running job can have files taken from
+      # under it. A job that fails before the
       # checkout: there is no script to run, this step is red too, and the job
       # was red before it.
       #

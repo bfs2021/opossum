@@ -76,6 +76,48 @@ func resolveEnvFiles(dir string, files EnvFiles, env []string, scope envScope) (
 	return mergeEnv(fromFiles, env), nil
 }
 
+// resolveBareFromProject gives a bare `NAME` in a service's `environment:` the
+// value the project's `.env` (or the `--env-file` given) has for it, when the
+// shell has none. docker compose reads a bare name from the project's
+// environment, the shell over `.env` (v5.5.1, `config`: with `FOO=x` in `.env`,
+// `- FOO` and `FOO:` both come out `FOO: x`); before this a bare name was left
+// for the runtime to take from the shell alone, so a value only in `.env` was
+// never passed and an image that needs it stopped.
+//
+// A name the shell sets is left bare: the shell is asked for it where the
+// declaration is rendered and where the container is made, and it outranks
+// `.env`, so the declared names stay as written for the readers that look at
+// them (see TestConfigShowsBareNamesTheWayDockerShowsThem). A name nothing sets
+// stays bare too: it is the one docker compose shows as null and sends nothing
+// for, and it still hides the same key from an env_file (see explicitEnv).
+// OPOSSUM_HOST_GATEWAY, which the scope offers to `${...}` as a last resort, is
+// not offered here: docker compose has no such variable.
+func resolveBareFromProject(env []string, scope envScope) []string {
+	if len(env) == 0 || len(scope.level) == 0 {
+		return env
+	}
+	inShell := func(name string) (string, bool) {
+		if scope.outer == nil {
+			return "", false
+		}
+		return scope.outer(name)
+	}
+	out := make([]string, len(env))
+	for i, e := range env {
+		out[i] = e
+		if strings.Contains(e, "=") {
+			continue
+		}
+		if _, ok := inShell(e); ok {
+			continue
+		}
+		if v, ok := scope.level[e]; ok {
+			out[i] = e + "=" + v
+		}
+	}
+	return out
+}
+
 // explicitEnv turns a service's `environment:` list into a lookup map. A bare
 // `KEY` (no `=`) means "take it from the host", so it defines nothing here — the
 // shell is already ranked above this level and will answer for it.

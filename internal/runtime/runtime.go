@@ -649,17 +649,37 @@ func (r *Runtime) ImageExists(ref string) bool {
 // name wins. They are the same image built for different machines, so a name that
 // differs between them is not something to pick a side on here.
 func (r *Runtime) ImageEnv(ref string) (map[string]string, bool) {
-	// stdout and stderr apart: mixing them would put a warning inside the JSON, and
-	// the caller would be told the image could not be reached when it answered
-	// perfectly well — while letting stderr through would print the runtime's
-	// "image not found" to someone who is only having an overlay written, for which
-	// not finding the image is the ordinary case.
+	facts, ok := r.ImageFacts(ref)
+	if !ok {
+		return nil, false
+	}
+	return facts.Env, true
+}
+
+// ImageFacts is what one `image inspect` of an image says that planning reads:
+// the environment it declares and the CPU architectures it has a build for.
+type ImageFacts struct {
+	Env map[string]string
+	// Archs are the architectures the image's variants name (`arm64`, `amd64`, …).
+	// An image pulled for a machine it has no build for lists only the builds it has:
+	// an amd64-only image, pulled here, lists amd64 alone. Empty when the answer
+	// named none.
+	Archs []string
+}
+
+// ImageFacts asks once what ImageEnv asks for, and the architectures besides, so
+// that planning does not run `image inspect` twice for one image. ok is false as it
+// is for ImageEnv: the image is not here, or the answer cannot be read.
+func (r *Runtime) ImageFacts(ref string) (ImageFacts, bool) {
 	out, _, err := r.captureSplitQuery("image", "inspect", ref)
 	if err != nil {
-		return nil, false
+		return ImageFacts{}, false
 	}
 	var images []struct {
 		Variants []struct {
+			Platform struct {
+				Architecture string `json:"architecture"`
+			} `json:"platform"`
 			Config struct {
 				Config struct {
 					Env []string `json:"Env"`
@@ -668,26 +688,28 @@ func (r *Runtime) ImageEnv(ref string) (map[string]string, bool) {
 		} `json:"variants"`
 	}
 	if err := json.Unmarshal([]byte(out), &images); err != nil {
-		return nil, false
+		return ImageFacts{}, false
 	}
-	env := map[string]string{}
+	facts := ImageFacts{Env: map[string]string{}}
+	seen := map[string]bool{}
 	for _, img := range images {
 		for _, v := range img.Variants {
+			if a := v.Platform.Architecture; a != "" && !seen[a] {
+				seen[a] = true
+				facts.Archs = append(facts.Archs, a)
+			}
 			for _, e := range v.Config.Config.Env {
 				name, value, ok := strings.Cut(e, "=")
 				if !ok {
 					continue
 				}
-				if _, seen := env[name]; !seen {
-					env[name] = value
+				if _, dup := facts.Env[name]; !dup {
+					facts.Env[name] = value
 				}
 			}
 		}
 	}
-	// ok says the image answered, not that it declared anything: an image with an
-	// empty environment is a real answer, and a caller that reports it as "not here
-	// to be asked" would be telling its reader something false.
-	return env, true
+	return facts, true
 }
 
 // ImageWorkingDir returns the directory an image starts its process in, and
@@ -1949,6 +1971,16 @@ func (r *Runtime) StatsSnapshot(names []string) ([]ContainerStat, error) {
 // Pull fetches an image, streaming progress.
 func (r *Runtime) Pull(ref string) error {
 	return r.stream("image", "pull", ref)
+}
+
+// PullPlatform pulls an image limited to one platform (`linux/arm64`), quietly, and
+// returns what the runtime said besides the error: a pull for a platform the image
+// has no build for fails with a sentence the caller reads (OPSM-412's), and showing
+// it as it happens would put an error on screen for what is only a question.
+// Only that platform's build is fetched and unpacked, which is what makes asking
+// "does it have an arm64 build" cheaper than a pull of everything the image lists.
+func (r *Runtime) PullPlatform(ref, platform string) (string, error) {
+	return r.capture("image", "pull", "--progress", "none", "--platform", platform, ref)
 }
 
 // Stop stops a running container. Its outcome is not reported: the CLI's exit

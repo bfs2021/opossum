@@ -354,6 +354,9 @@ func parseDotEnv(path string, scope envScope) (map[string]string, error) {
 			continue
 		}
 		raw = strings.TrimPrefix(raw, "export ")
+		if raw == "export" {
+			continue // the keyword on a line of its own names nothing (docker compose passes nothing)
+		}
 		key, val, ok := splitEnvLine(raw)
 		// A name this refuses (a space or punctuation) is recorded and its line read
 		// past when the scope asks for that (the project's `.env`), and is the read's
@@ -368,13 +371,15 @@ func parseDotEnv(path string, scope envScope) (map[string]string, error) {
 			// character they cannot see.
 			return nil, markInNameErr(path, i+1)
 		}
-		if !ok {
-			// Where, and what is missing — but not the line itself. An env file is
-			// where passwords and tokens live, and a token pasted onto a line of its
-			// own is exactly the shape that lands here; quoting it back would put it
-			// in the terminal, the CI log, and whatever issue the output gets pasted
-			// into. The reader can open their own file at the line named.
-			return nil, fmt.Errorf("%s:%d: expected KEY=VALUE, but the line has no `=`", path, i+1)
+		// A line with no separator is a name on its own: docker compose (v5.5.1,
+		// measured) reads it as "take this from the environment" — the shell, then
+		// the project's `.env` — and passes nothing when neither has it. It is
+		// held to the same rules as any name below (a space, or punctuation in it,
+		// is refused, so a token pasted on a line of its own is not taken for one
+		// and is not quoted back either: it is an env file where passwords live).
+		bare := !ok
+		if bare {
+			key, val = raw, ""
 		}
 		key = strings.TrimSpace(key)
 		// Only the two rules an earlier opossum did not hold are read past (a space
@@ -410,11 +415,30 @@ func parseDotEnv(path string, scope envScope) (map[string]string, error) {
 			}
 		}
 		if refused != nil {
+			// A line that is only a name was refused outright before it was read
+			// as one, so no project can have been started on it: it is not one of
+			// the names failName reads past.
+			if bare {
+				return nil, refused
+			}
 			if err := failName(scope, refused); err != nil {
 				return nil, err
 			}
 		}
 		val = strings.TrimSpace(val)
+		if bare && refused == nil {
+			if scope.outer != nil {
+				// Not written through to the level: whatever the outer scope has is
+				// already what a later `${...}` in this file reads. (The outer scope of an
+				// env_file includes the service's own `environment:`, which docker compose
+				// would not ask here; it always wins over the file in the end, so the
+				// difference cannot be seen.)
+				if v, found := scope.outer(key); found {
+					out[key] = v
+				}
+			}
+			continue
+		}
 		if refused != nil {
 			// Read past: the name is recorded and nothing of the line is kept — and a
 			// quoted value that opens here is walked to its closing quote, unexpanded.

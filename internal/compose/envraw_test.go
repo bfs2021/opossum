@@ -68,9 +68,10 @@ func TestEnvFileFormatRawHandsValuesOverAsWritten(t *testing.T) {
 			raw:    []string{"A=1", "C=1 # c"},
 			dotenv: []string{"A=1", "C=1"}},
 		{name: "a line with no = is skipped, KEY: VALUE among them",
-			file:   "JUSTNAME\nA:1\nB=2\n",
-			raw:    []string{"B=2"},
-			dotErr: "no `=`"},
+			file: "JUSTNAME\nA:1\nB=2\n",
+			raw:  []string{"B=2"},
+			// read by default, the name alone is one that nothing sets: passed as nothing
+			dotenv: []string{"A=1", "B=2"}},
 		{name: "blanks before the name go, blanks after the value stay",
 			file:   "   A=1   \nB=2\n",
 			raw:    []string{"A=1   ", "B=2"},

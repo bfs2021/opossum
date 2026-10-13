@@ -279,3 +279,30 @@ func (o *Orchestrator) recordedChownFailures() []chownFailure {
 	}
 	return out
 }
+
+// hostDirHoldsNothing reports whether a bind source is a directory with no
+// entries, or does not exist yet (a symlink is neither) — the only state in which moving it into a named
+// volume leaves no data behind. Anything it cannot read, and anything that is not
+// a directory, counts as holding something: the answer decides whether to change
+// the project without asking, so a doubt resolves to "ask".
+func (o *Orchestrator) hostDirHoldsNothing(src string) bool {
+	if strings.HasPrefix(src, "~") {
+		return false
+	}
+	p := src
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(o.Project.BaseDir, p)
+	}
+	// Lstat, not Stat: a link whose target is missing (a disk not mounted right
+	// now) looks like nothing at all through Stat, and the data is simply
+	// elsewhere. A link is never judged empty.
+	st, err := os.Lstat(p)
+	if os.IsNotExist(err) {
+		return true
+	}
+	if err != nil || st.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	ents, err := os.ReadDir(p)
+	return err == nil && len(ents) == 0
+}

@@ -82,7 +82,9 @@ Facts to rely on:
   `up` records the service, container path and host path in
   `.opossum/chown-failures.json`, and the next `up --from-docker-compose` turns each
   record into a suggestion naming that mount and no other (a record whose service or
-  mount is gone, or whose mount is already a named volume, is skipped). `destroy`
+  mount is gone, or whose mount is already a named volume, is skipped). When the host
+  directory is empty or not there yet, and no other service mounts it, the swap is
+  written as an applied change instead — there is no data to leave behind. `destroy`
   removes the file with the rest of `.opossum/`.
 - Each entry carries a fixed comment shape for its class, always starting with what
   it is about and a **Why** that cites the diagnostic code (cross-referable to the
@@ -90,7 +92,13 @@ Facts to rely on:
   **To undo**; suggestions give **To apply** / **To ignore**; notes give **What to
   expect**.
 - The file is **never overwritten** once it exists, and your compose file is never
-  modified. Editing or deleting the overlay is safe and is the intended way to
+  modified. A later run that finds an applied change for a file opossum wrote adds it
+  to the end as a second document (`---`), after what is there, which is left exactly
+  as it was; a file without opossum's header is never added to, and suggestions and
+  notes are not added — they stay on screen. An entry opossum wrote and you later
+  deleted is not added back (opossum keeps what it wrote in
+  `.opossum/overlay-entries.json`); in a file from before that record, only what a
+  container's death showed is added. Editing or deleting the overlay is safe and is the intended way to
   disagree with a fix.
 - Nothing is written when `-f` was given (the overlay wouldn't be merged) or when
   no known pattern matched.
@@ -453,7 +461,9 @@ list; codes are add-only and never change meaning.
 - **`[OPSM-412]` … `this image has no build for Apple silicon (arm64)`** → decoded from a
   failed start under `up` (`does not support required platforms`, or `Error: platform linux/arm64` — 1.2.2 uses both; or, on 1.4.1 for some amd64-only images pulled for the first time, `Error: unsupported platform Platform(… _rawArch: "arm64")`; see `testdata/real-cli-output.md`); a one-off `run` reports
   the runtime's own wording instead. Add `platform: linux/amd64` to the
-  service and start again: opossum runs an amd64 image under Rosetta. Check first that the
+  service and start again: opossum runs an amd64 image under Rosetta. (`up
+  --from-docker-compose` writes that line into the overlay itself, for an image whose
+  builds are read as amd64 and no arm64.) Check first that the
   image really has no arm64 tag — many publish one under a different tag, and a native
   image is faster than an emulated one.
 - **`[OPSM-401]` … `container is not running (state "stopped"); its last log
@@ -517,7 +527,13 @@ list; codes are add-only and never change meaning.
   words for that (`path '…' does not exist`) arrive detached from the reason. Create
   it yourself (`mkdir -p <path>`) or, for a broken symlink, point it somewhere that
   exists; then `up` again. A source that already exists — including a config *file* —
-  is left alone: opossum neither creates nor replaces it.
+  is left alone: opossum neither creates nor replaces it. One case has an answer
+  already: a read-only bind of `/etc/timezone`, or of a log file directly under
+  `/var/log` (`*.log`, `syslog`, `messages`, `secure`), that this Mac does not have —
+  `up --from-docker-compose` writes an applied overlay entry that binds a stand-in file
+  from opossum's state directory instead (the Mac's time zone, or an empty file). If
+  that file cannot be made, the error reads `could not make the stand-in file` and still
+  carries `[OPSM-104]`.
 - **`[OPSM-105]` … a data directory is a bind mount** → Apple `container` bind mounts
   are host-owned and cannot be chowned from inside, so an image that takes ownership
   of its data directory at startup dies there. Two paths reach this code, and they
@@ -536,7 +552,7 @@ list; codes are add-only and never change meaning.
   signature, that service and that mount are recorded, and the next
   `up --from-docker-compose` proposes a **suggestion** naming exactly that mount —
   into the overlay when there isn't one yet, on screen when there is (an existing
-  `compose.opossum.yaml` is never overwritten). It never proposes a swap for a
+  `compose.opossum.yaml` is never overwritten; see above for what is added to it). It never proposes a swap for a
   directory that has not failed: an earlier version guessed from the shape of the
   mount and was wrong about half the time. Nor does it propose one where the swap
   was already applied for that same mount, so the overlay never carries two blocks
@@ -775,6 +791,7 @@ Every `[OPSM-NNN]` opossum can emit (add-only; grouped 1xx storage / 2xx network
 - `OPSM-412` — the image has no arm64 build, so the container cannot start on Apple silicon.
 - `OPSM-413` — a `required: false` dependency did not become healthy, or did not complete successfully; the dependent is started anyway, as docker compose starts it. Also a run-to-completion service that failed while none of the services the command starts requires it (a dependent behind a profile that is not on, or not named): passed over, as docker compose does.
 - `OPSM-414` — asked the per-project supervisor to stop but couldn't confirm it did within the time waited; it may still be running, or (`... was not asked to stop`) could not check whether the process behind the pid file is the supervisor (`ps` would not answer) and did not signal it.
+- `OPSM-415` — container 1.5.0 refuses to pull an `lscr.io/linuxserver/...` image (`refusing insecure credential exchange`); `--from-docker-compose` writes the same image from `ghcr.io/linuxserver/...` into the overlay.
 - `OPSM-501` — unsupported top-level compose field(s), ignored.
 - `OPSM-502` — unsupported service compose field(s), ignored (e.g. `network_mode: host`).
 - `OPSM-601` — a `watch` rebuild action failed.

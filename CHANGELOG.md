@@ -6,6 +6,23 @@ All notable changes to opossum are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-10-14
+
+### Changed
+
+- When a service has died taking ownership of a bind-mounted directory and that host directory is empty (or does not exist yet), `up --from-docker-compose` now writes the named-volume swap as an applied change in the overlay instead of a commented suggestion, since moving an empty directory leaves no data behind. With any file in the directory, or another service mounting it, the swap stays a suggestion to decide on.
+- When a later `up --from-docker-compose` finds a change it applies on its own for a project whose `compose.opossum.yaml` opossum already wrote — a service that died chowning an empty host directory, say, or a service behind a profile that is now on — the change is added to the end of that file as a second document, and the run uses it. What was in the file is left exactly as it was, so `rm` and a re-run are no longer needed for these. A file without opossum's header is never added to, and suggestions and notes are still only shown. An entry opossum wrote and you then deleted from the file is not put back.
+
+### Fixed
+
+- `opossum up --from-docker-compose` now reads an `lscr.io/linuxserver/<name>` image from `ghcr.io/linuxserver/<name>`, and says so in the overlay. Apple `container` refuses to pull from `lscr.io` (`refusing insecure credential exchange`), where docker compose pulls the same name without complaint; linuxserver publishes both names as the same image, so the service runs what your file names and only the address it is fetched from changes. The tag or digest is kept as written, a service that builds is left alone, and the entry (`OPSM-415`) shows how to undo it.
+- `opossum up --from-docker-compose` now writes `platform: linux/amd64` into the overlay for a service whose image has an amd64 build and no arm64 one. docker runs such an image, emulated, without a word, while Apple `container` stops with opossum's `this image has no build for Apple silicon` (`OPSM-412`); the overlay entry runs the same build through Rosetta, so the service runs the image your file names. To read which builds an image has, planning pulls it limited to `linux/arm64` and, only when the runtime says there is no such build, limited to `linux/amd64` — one platform at a time, so an image that lists a dozen builds is not fetched and unpacked in full (an image published as a single manifest, with no index, is fetched in full by the first pull before it is refused, and again by the second). Those pulls are made only for a plan that is acted on — not under `--dry-run`, not when an overlay already exists or `-f` is given, and only for the services named on the command line when there are any. A service that already names a platform, or that builds, is left as it is, and the entry says that Rosetta is what it relies on. A side effect: an image is now pulled during planning, before the run.
+- In the `compose.opossum.yaml` that `up --from-docker-compose` writes, the block of suggestions that follows the applied entries now starts with `---`, a document of its own. Uncommenting the whole block used to write `services:` (and `volumes:`) a second time under the applied entries, and the file then failed to load with `sets the same key twice`. The block still has one `services:` and one `volumes:` for all its suggestions.
+- `opossum up --from-docker-compose` no longer stops on a read-only bind of `/etc/timezone`, or of a log file such as `/var/log/auth.log` or `/var/log/syslog`, that a Linux host has and this Mac does not (it used to refuse with `OPSM-104`, because `/etc` and `/var/log` are not folders opossum can create a file in). The overlay binds a stand-in kept in opossum's state directory instead — a file holding this Mac's time zone, or an empty file — and says so. A device or kernel path (`/dev/dri`, `/lib/modules`), a writable bind and a directory are still refused as before.
+- A `depends_on: condition: service_healthy` wait no longer sleeps the dependency's whole `start_period` before it first runs the healthcheck. It probes from the start and, as docker compose does, takes the first probe that passes as healthy — also inside the `start_period`, which now only excuses failures: they do not count against `retries` until it has run out. While the `start_period` lasts the probes come every five seconds, as in docker compose (or every `interval`, if that is shorter). A database that is ready in 25 seconds behind `start_period: 1m` used to be waited on for a minute; two of them in a service's dependencies, for two. An `interval` of `0s` now means docker compose's 30 seconds, where it used to mean probes with no wait between them.
+- A name written in `environment:` with no value (`- POSTGRES_PASSWORD`, or `POSTGRES_PASSWORD:`) is now taken from the project's environment — the shell over the project's `.env` (or the file given with `--env-file`) — as docker compose does. Before, only the shell was asked, so a value that lived in `.env` never reached the container and an image that needs it (the official Postgres image, for one) stopped with `You must specify POSTGRES_PASSWORD`. A name nothing sets is still passed as unset, and a value you write out is left as it is. (A service from a file brought in with `include` is still looked up in the top-level project's environment, not the included project's own.)
+- A line of an `env_file` (or of the project's `.env`) with a name and no `=` is no longer refused with `expected KEY=VALUE`. docker compose reads it as "take this from the environment": its value is the shell's, then the project's `.env`'s (a line of the `.env` itself has the shell alone to ask), and nothing is passed when neither has it, which is how it is read here now. A name with a space or punctuation in it is still refused, without the line being quoted back.
+
 ## [0.46.0] - 2026-10-13
 
 ### Changed
@@ -2898,7 +2915,8 @@ First tagged release. Everything opossum can do so far.
 - `restart` reassigns a container's IP (the runtime does this on `start`); the
   name and config are preserved, so name-based discovery is unaffected.
 
-[Unreleased]: https://github.com/suruseas/opossum/compare/v0.46.0...HEAD
+[Unreleased]: https://github.com/suruseas/opossum/compare/v0.47.0...HEAD
+[0.47.0]: https://github.com/suruseas/opossum/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/suruseas/opossum/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/suruseas/opossum/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/suruseas/opossum/compare/v0.43.0...v0.44.0

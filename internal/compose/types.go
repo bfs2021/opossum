@@ -4340,7 +4340,7 @@ type Healthcheck struct {
 	Interval    time.Duration // wait between attempts (default 30s)
 	Timeout     time.Duration // enforced per-attempt timeout (default 30s)
 	Retries     int           // attempts before giving up (default 3)
-	StartPeriod time.Duration // grace period before the first attempt (default 0)
+	StartPeriod time.Duration // grace for failures: a probe that fails before it ends does not count against Retries (default 0)
 	Disabled    bool          // switched off: `test: ["NONE"]` or `disable: true`
 }
 

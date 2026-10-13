@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/suruseas/opossum/internal/compose"
+	"github.com/suruseas/opossum/internal/runtime"
 )
 
 // Adapting a compose project
@@ -404,18 +405,31 @@ func servicePGDATA(svc *compose.Service) string {
 // imageEnv is ImageEnv with the answer remembered: planning an overlay asks about
 // the same image for every mount it considers, and each ask is a process.
 func (o *Orchestrator) imageEnv(ref string) (map[string]string, bool) {
-	if o.imageEnvs == nil {
-		o.imageEnvs = map[string]map[string]string{}
-	}
-	if env, seen := o.imageEnvs[ref]; seen {
-		return env, env != nil
-	}
-	env, ok := o.rt.ImageEnv(ref)
+	facts, ok := o.imageFacts(ref)
 	if !ok {
-		env = nil
+		return nil, false
 	}
-	o.imageEnvs[ref] = env
-	return env, ok
+	return facts.Env, true
+}
+
+// imageFactsAnswer is what one ask of an image came to.
+type imageFactsAnswer struct {
+	facts runtime.ImageFacts
+	ok    bool
+}
+
+// imageFacts asks the runtime about an image once and remembers the answer, the
+// environment and the architectures both read from it.
+func (o *Orchestrator) imageFacts(ref string) (runtime.ImageFacts, bool) {
+	if o.imageFactsMemo == nil {
+		o.imageFactsMemo = map[string]imageFactsAnswer{}
+	}
+	if a, seen := o.imageFactsMemo[ref]; seen {
+		return a.facts, a.ok
+	}
+	facts, ok := o.rt.ImageFacts(ref)
+	o.imageFactsMemo[ref] = imageFactsAnswer{facts, ok}
+	return facts, ok
 }
 
 // startingDir is the directory a service's process starts in, or "" when nothing
@@ -567,6 +581,9 @@ type Adaptation struct {
 	// caller reports each group separately, because calling a note a "change"
 	// would overstate what the overlay did.
 	Kind string
+	// Key names what the entry changes — service, code, and the mount or value —
+	// the same on every run, so a later run can tell it has seen this one before.
+	Key string
 }
 
 // serviceAdaptation is the internal, renderable form: the YAML fragment for one
@@ -583,6 +600,14 @@ type serviceAdaptation struct {
 	block   string
 	entries []string
 	volume  string // a top-level named volume to declare, if any
+	// scalar means block is a key with one value rather than a mapping or a
+	// list: entries holds that value, and it is written on the key's own line
+	// (`image: x`), where a mapping's entries go under the key.
+	scalar bool
+	// observed marks an entry driven by something that happened (a container that
+	// died), not by the shape of the project: evidence a run that wrote the
+	// overlay could not have had.
+	observed bool
 }
 
 // PlanOverlay inspects the resolved project (base + any override already merged)
@@ -612,6 +637,15 @@ func (o *Orchestrator) PlanOverlay() (string, []Adaptation) {
 // the overlay already there and reports what those services would need
 // (#492).
 func (o *Orchestrator) PlanOverlayFor(named []string) (body string, changes []Adaptation, gated []string) {
+	plans, gated := o.planFor(named)
+	if len(plans) == 0 {
+		return "", nil, gated
+	}
+	return renderOverlay(plans), summarize(plans), gated
+}
+
+// planFor is the plan itself, before it is rendered as an overlay.
+func (o *Orchestrator) planFor(named []string) (plans []serviceAdaptation, gated []string) {
 	on := map[string]bool{}
 	for _, n := range named {
 		on[n] = true
@@ -627,17 +661,95 @@ func (o *Orchestrator) PlanOverlayFor(named []string) (body string, changes []Ad
 	sort.Strings(names) // deterministic output
 	sort.Strings(gated)
 
+	// Images are pulled to be read only for the services this run starts; the others
+	// are planned all the same, from what is already here.
+	o.planNamed = nil
+	if len(named) > 0 {
+		o.planNamed = on
+	}
 	claimed := map[string]bool{} // volume names this plan has already taken
-	var plans []serviceAdaptation
 	for _, name := range names {
 		plans = append(plans, o.adaptService(name, o.Project.Services[name], claimed)...)
 	}
 	plans = append(plans, o.suggestSharedVolumeFix(names)...)
 	plans = append(plans, o.suggestObservedChownFailures(plans, claimed)...)
-	if len(plans) == 0 {
-		return "", nil, gated
+	for i := range plans {
+		plans[i].Key = entryKey(plans[i])
 	}
-	return renderOverlay(plans), summarize(plans), gated
+	return plans, gated
+}
+
+// entryKey is what an entry changes, without the names opossum picked for it: a
+// volume is `blog-content` one run and `blog-content-2` the next when the first
+// is taken, and the mount it replaces is what stays the same.
+func entryKey(p serviceAdaptation) string {
+	parts := []string{p.Service, p.Code, p.block}
+	for _, e := range p.entries {
+		e = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(e), "- "))
+		if p.block == "volumes" {
+			if i := strings.Index(e, ":"); i >= 0 {
+				e = e[i:] // `name:/target` is the target; the name is opossum's
+			}
+		}
+		parts = append(parts, e)
+	}
+	return strings.Join(parts, "|")
+}
+
+// PlanAppendixFor is the plan for a project whose overlay opossum already wrote.
+// The overlay is never rewritten, but the changes found since that are APPLIED
+// ones — a service that has since died chowning an empty directory, say — would
+// otherwise wait for the file to be deleted and regenerated. They come back as a
+// document to add at the end of the file: opossum reads a file of several
+// documents as that many files merged in order, so the new one stands after what
+// is there and nothing above it is touched. What needs a decision (suggestions,
+// notes) is not in it; it is returned apart, as the entries a reader has to look
+// at.
+func (o *Orchestrator) PlanAppendixFor(named []string) (appendix string, appended, left, kept []Adaptation, gated []string) {
+	plans, gated := o.planFor(named)
+	// An applied entry that is not in the file is either new or taken out on
+	// purpose, and the file cannot say which. What opossum put in the file is
+	// remembered (RecordWrittenKeys), so an entry it wrote and that is gone is
+	// the reader's answer and is not put back. With nothing remembered — a file
+	// from before that — only what a container's death showed is new for certain.
+	written, known := o.writtenKeys()
+	var applied, rest, declined []serviceAdaptation
+	for _, p := range plans {
+		switch {
+		case p.class != classApplied:
+			rest = append(rest, p)
+		case known && !written[p.Key], !known && p.observed:
+			applied = append(applied, p)
+		default:
+			declined = append(declined, p)
+		}
+	}
+	kept = summarize(declined)
+	if len(applied) == 0 {
+		return "", nil, summarize(rest), kept, gated
+	}
+	var b strings.Builder
+	b.WriteString("\n# ── Added later ─────────────────────────────────────────────────────────\n" +
+		"# opossum found these after this file was written and added them here, as a\n" +
+		"# second document merged after the one above; nothing above was changed.\n" +
+		"# To undo: delete this whole section, from the `---` line down. A `---` left\n" +
+		"# with nothing after it is an empty document, which is refused.\n" +
+		"---\nservices:\n")
+	b.WriteString(renderServiceBlocks(applied, false))
+	var volumes []string
+	for _, p := range applied {
+		if p.volume != "" {
+			volumes = append(volumes, p.volume)
+		}
+	}
+	if len(volumes) > 0 {
+		sort.Strings(volumes)
+		b.WriteString("\nvolumes:\n")
+		for _, v := range volumes {
+			fmt.Fprintf(&b, "  %s: {}\n", yamlKey(v))
+		}
+	}
+	return b.String(), summarize(applied), summarize(rest), kept, gated
 }
 
 func summarize(plans []serviceAdaptation) []Adaptation {
@@ -657,6 +769,76 @@ func summarize(plans []serviceAdaptation) []Adaptation {
 	return out
 }
 
+// lscrPrefix is the registry host and namespace that Apple `container` will not
+// pull from. The runtime refuses the exchange with the credential server
+// (`refusing insecure credential exchange: authorization server ghcr.io is not
+// in the same registrable domain as registry lscr.io`), where docker compose
+// pulls the same name without complaint.
+const (
+	lscrPrefix = "lscr.io/linuxserver/"
+	ghcrPrefix = "ghcr.io/linuxserver/"
+)
+
+// adaptRegistryName reads an `lscr.io/linuxserver/<name>` image as the
+// `ghcr.io/linuxserver/<name>` it is served from. linuxserver publishes the two
+// names as the same image (lscr.io redirects to ghcr.io), so the service runs
+// the image the file names; only the address it is fetched from changes. A tag
+// or digest after the name is kept as written.
+//
+// A service that builds is left alone: its `image:` names what the build
+// produces, not something to fetch, and renaming it would rename the result.
+func ghcrName(image string) (string, bool) {
+	if !strings.HasPrefix(strings.ToLower(image), lscrPrefix) {
+		return "", false
+	}
+	return ghcrPrefix + image[len(lscrPrefix):], true
+}
+
+func (o *Orchestrator) adaptRegistryName(name string, svc *compose.Service) []serviceAdaptation {
+	if svc.Build != nil || !strings.HasPrefix(strings.ToLower(svc.Image), lscrPrefix) {
+		return nil
+	}
+	// Another service that builds this very name makes it a local tag, not an
+	// address: this one runs what that build produces, and a renamed reference
+	// would go looking for it on ghcr.io.
+	for other, s := range o.Project.Services {
+		if other != name && s != nil && s.Build != nil && strings.EqualFold(s.Image, svc.Image) {
+			return nil
+		}
+	}
+	renamed := ghcrPrefix + svc.Image[len(lscrPrefix):]
+	return []serviceAdaptation{{
+		Adaptation: Adaptation{
+			Service: name,
+			Code:    string(codeRegistryRefused),
+			Summary: fmt.Sprintf("service %q: image %s pulled from %s", name, svc.Image, renamed),
+		},
+		comment: commentBlock(
+			fmt.Sprintf("%s service %q: image read from ghcr.io instead of lscr.io.", overlayMarker, esc(name)),
+			[]string{
+				fmt.Sprintf("Apple container refuses to pull %s: it will not send credentials", esc(svc.Image)),
+				"to ghcr.io, where lscr.io redirects, because the two are not in the same",
+				fmt.Sprintf("domain (%s). linuxserver publishes both names as the same", codeRegistryRefused),
+				"image, so the service runs the image your file names; only the address",
+				"it is fetched from changes. The tag or digest is kept as written, as",
+				"it resolves today: a variable in it is written out with its current value,",
+				"so change it here if you change it in your file.",
+			},
+			[]string{
+				fmt.Sprintf("after `opossum up`, `opossum ps` should list %s with the image", name),
+				esc(renamed) + ".",
+			},
+			[]string{
+				"run `opossum logs " + esc(name) + "` and `opossum doctor`. If the pull itself fails,",
+				"the tag may not exist on ghcr.io: check it there.",
+			},
+		),
+		block:   "image",
+		entries: []string{esc(renamed)},
+		scalar:  true,
+	}}
+}
+
 // adaptService returns the adaptations for one service. A Postgres service whose
 // data directory is a bind mount needs both fixes: the mount has to become a named
 // volume (bind mounts can't be chowned), and PGDATA then has to point at a
@@ -671,6 +853,15 @@ func (o *Orchestrator) adaptService(name string, svc *compose.Service, claimed m
 	// Restart and Volumes and nothing else. They are appended last, where they
 	// have always gone.
 	notes := o.noteNoYAML(name, svc)
+	// The image name is read before anything else because nothing else decides
+	// it: the rename depends on the image reference and on nothing in the
+	// environment, so an unreadable env_file (below) is no reason to leave the
+	// service on a name the runtime refuses.
+	byPath := o.adaptRegistryName(name, svc)
+	// A bind of a file only a Linux host has is decided by the path alone too.
+	byPath = append(byPath, o.adaptMissingHostFiles(name, svc)...)
+	// An image with no arm64 build is read from the image, not guessed from its name.
+	byPath = append(byPath, o.adaptAmd64OnlyImage(name, svc)...)
 	// Decide nothing from an environment that could not be read. The two
 	// questions below are both answered out of it — whether PGDATA is already
 	// set is the load-bearing one — and an unreadable env_file reads there as
@@ -687,9 +878,9 @@ func (o *Orchestrator) adaptService(name string, svc *compose.Service, claimed m
 	// runs outside this function: they read volumes and recorded failures,
 	// never the environment.
 	if _, err := svc.ResolvedEnv(); err != nil {
-		return notes
+		return append(byPath, notes...)
 	}
-	var out []serviceAdaptation
+	out := byPath
 	// Ask first whether the PGDATA half is available: for an image that initialises
 	// somewhere other than the mount, the swap is only a fix alongside it.
 	_, pgdataFixApplies := o.adaptPGDATA(name, svc, true)
@@ -1149,21 +1340,10 @@ func renderOverlay(plans []serviceAdaptation) string {
 		b.WriteString("\nservices:\n")
 		b.WriteString(renderServiceBlocks(applied, false))
 	}
-	if len(suggestions) > 0 {
-		b.WriteString("\n# ── Suggestions ─────────────────────────────────────────────────────────\n" +
-			"# opossum did NOT make these changes: each alters what the project means, so\n" +
-			"# the call is yours. Uncommenting a whole block applies it (the `services:`\n" +
-			"# line included — this file is merged like any compose file).\n")
-		b.WriteString(commentOut("services:\n" + renderServiceBlocks(suggestions, true)))
-	}
-	if len(notes) > 0 {
-		b.WriteString("\n# ── Notes ───────────────────────────────────────────────────────────────\n" +
-			"# These are things " + NoteFrame + ".\n")
-		for _, n := range notes {
-			b.WriteString(strings.TrimRight(n.comment, "\n") + "\n")
-		}
-	}
-
+	// The volumes the applied entries introduce are declared with them, in the
+	// first document: a suggestion block below starts a second one, and a
+	// `volumes:` here after it would be written twice once that block is
+	// uncommented.
 	var volumes []string
 	for _, p := range applied {
 		if p.volume != "" {
@@ -1177,6 +1357,32 @@ func renderOverlay(plans []serviceAdaptation) string {
 			fmt.Fprintf(&b, "  %s: {}\n", yamlKey(v))
 		}
 	}
+	if len(suggestions) > 0 {
+		b.WriteString("\n# ── Suggestions ─────────────────────────────────────────────────────────\n" +
+			"# opossum did NOT make these changes: each alters what the project means, so\n" +
+			"# the call is yours. Uncommenting a whole block applies it (the `services:`\n" +
+			"# line included — this file is merged like any compose file).\n")
+		// With applied entries above, the file already has a live `services:` (and
+		// maybe a `volumes:`). Uncommenting a second one under it would write the
+		// key twice, which the loader refuses, so the block starts a document of
+		// its own: opossum reads a file of several as that many files merged in
+		// order, which is what two entries each under its own `services:` mean.
+		if len(applied) > 0 {
+			b.WriteString("# It starts with `---`, a second document, so it stands beside the applied\n" +
+				"# entries above without repeating their keys.\n")
+			b.WriteString(commentOut("---\nservices:\n" + renderServiceBlocks(suggestions, true)))
+		} else {
+			b.WriteString(commentOut("services:\n" + renderServiceBlocks(suggestions, true)))
+		}
+	}
+	if len(notes) > 0 {
+		b.WriteString("\n# ── Notes ───────────────────────────────────────────────────────────────\n" +
+			"# These are things " + NoteFrame + ".\n")
+		for _, n := range notes {
+			b.WriteString(strings.TrimRight(n.comment, "\n") + "\n")
+		}
+	}
+
 	return b.String()
 }
 
@@ -1188,6 +1394,7 @@ func renderServiceBlocks(plans []serviceAdaptation, inlineVolumes bool) string {
 		comments []string
 		blocks   []string
 		entries  map[string][]string
+		scalars  map[string]bool
 		volumes  []string
 	}
 	var groups []group
@@ -1196,7 +1403,7 @@ func renderServiceBlocks(plans []serviceAdaptation, inlineVolumes bool) string {
 		i, ok := index[p.Service]
 		if !ok {
 			index[p.Service] = len(groups)
-			groups = append(groups, group{name: p.Service, entries: map[string][]string{}})
+			groups = append(groups, group{name: p.Service, entries: map[string][]string{}, scalars: map[string]bool{}})
 			i = len(groups) - 1
 		}
 		groups[i].comments = append(groups[i].comments, p.comment)
@@ -1207,6 +1414,9 @@ func renderServiceBlocks(plans []serviceAdaptation, inlineVolumes bool) string {
 			groups[i].blocks = append(groups[i].blocks, p.block)
 		}
 		groups[i].entries[p.block] = append(groups[i].entries[p.block], p.entries...)
+		if p.scalar {
+			groups[i].scalars[p.block] = true
+		}
 		if p.volume != "" {
 			groups[i].volumes = append(groups[i].volumes, p.volume)
 		}
@@ -1223,6 +1433,10 @@ func renderServiceBlocks(plans []serviceAdaptation, inlineVolumes bool) string {
 		// a comment is expanded on load.
 		fmt.Fprintf(&b, "  %s:\n", yamlKey(g.name))
 		for _, blk := range g.blocks {
+			if g.scalars[blk] {
+				fmt.Fprintf(&b, "    %s: %s\n", blk, g.entries[blk][0])
+				continue
+			}
 			fmt.Fprintf(&b, "    %s:\n", blk)
 			for _, e := range g.entries[blk] {
 				b.WriteString(e + "\n")
@@ -1606,6 +1820,44 @@ func (o *Orchestrator) suggestObservedChownFailures(plans []serviceAdaptation, c
 			}
 		}
 		vol := o.freeVolumeName(compose.SanitizeName(f.Service)+"-"+compose.SanitizeName(pathLeaf(f.Target)), claimed)
+		// Nothing to lose: the directory holds no data, so the swap moves nothing
+		// and the reason for leaving it to the reader is gone. The first run
+		// made the directory (an empty one is what it leaves behind), which is
+		// exactly the case this is for. Any file in it, or another service reading
+		// it, keeps the swap a decision.
+		if len(sharedWith) == 0 && o.hostDirHoldsNothing(f.Source) {
+			out = append(out, serviceAdaptation{
+				Adaptation: Adaptation{
+					Service: f.Service,
+					Code:    string(codeBindDataDirChown),
+					Summary: fmt.Sprintf("service %q died taking ownership of %s; the empty host path %s moved to a named volume %q", f.Service, f.Target, f.Source, vol),
+				},
+				comment: commentBlock(
+					fmt.Sprintf("%s service %q: %s now uses the named volume %q instead of the host path %q.", overlayMarker, esc(f.Service), esc(f.Target), vol, esc(f.Source)),
+					[]string{
+						"This is not a guess. That container started, tried to take ownership of",
+						esc(f.Target) + ", and exited: Apple container bind mounts are",
+						"host-owned and cannot be chowned from inside. A named volume can.",
+						"Diagnostic: " + string(codeBindDataDirChown) + ".",
+						"The host directory " + esc(f.Source) + " was empty, so nothing is left behind:",
+						"the data now lives in a volume that only the runtime manages, and files",
+						"put in that host directory later are not seen by the service.",
+					},
+					[]string{
+						fmt.Sprintf("after `opossum up`, `opossum logs %s` should show no chown error.", f.Service),
+					},
+					[]string{
+						fmt.Sprintf("run `opossum logs %s` and `opossum doctor`, then match the error", f.Service),
+						"against the failure-signatures table in AGENTS.md.",
+					},
+				),
+				block:    "volumes",
+				entries:  []string{fmt.Sprintf("      - %s:%s", esc(vol), esc(f.Target))},
+				volume:   vol,
+				observed: true,
+			})
+			continue
+		}
 		out = append(out, serviceAdaptation{
 			Adaptation: Adaptation{
 				Service: f.Service,

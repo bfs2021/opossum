@@ -78,7 +78,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVarP(&projectName, "project-name", "p", "", "project name (default: COMPOSE_PROJECT_NAME from the shell or the .env, then the compose file's `name:`, then its directory)")
 	root.PersistentFlags().StringVar(&dnsDomain, "dns-domain", defaultDNSDomain, "local DNS domain for bare-name service discovery (create once: sudo container system dns create <domain>)")
 	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "print each underlying container command as it runs (useful for bug reports)")
-	root.PersistentFlags().StringArrayVar(&envFiles, "env-file", nil, "env file(s) read in place of the default .env, for ${VAR} interpolation and for COMPOSE_PROJECT_NAME, COMPOSE_FILE, COMPOSE_PATH_SEPARATOR and COMPOSE_PROFILES (repeatable; later files win)")
+	root.PersistentFlags().StringArrayVar(&envFiles, "env-file", nil, "env file(s) read in place of the default .env, for ${VAR} interpolation, for a service's bare environment names and for COMPOSE_PROJECT_NAME, COMPOSE_FILE, COMPOSE_PATH_SEPARATOR and COMPOSE_PROFILES (repeatable; later files win)")
 	root.PersistentFlags().StringArrayVar(&profiles, "profile", nil, "enable services gated behind this compose profile (repeatable; '*' enables every profile). Without it COMPOSE_PROFILES is read, from the shell and then the .env; given, it is the only source, as with docker compose. Changes which services are read from the compose file; what the commands that act on containers already there act on is unchanged by it")
 
 	root.AddCommand(
@@ -1487,6 +1487,10 @@ func statsCmd() *cobra.Command {
 // dryRun plans and reports without touching the filesystem, so `--dry-run` shows
 // the project as it would actually start rather than as it stands unadapted.
 func adaptProject(stderr io.Writer, o *orchestrator.Orchestrator, dryRun bool, named []string) (*orchestrator.Orchestrator, error) {
+	// The plan pulls an image to read which builds it has, and a plan that is only
+	// shown (--dry-run, an overlay already in place, -f) is not worth a download.
+	// This runs before SetDryRun, so the run's own dry-run is said here.
+	o.SetPlanPulls(!dryRun && len(filesChosen.paths) == 0 && compose.DiscoverOpossumOverlay(o.Project.BaseDir) == "")
 	if chosen := filesChosen; len(chosen.paths) != 0 {
 		// Explain the no-op: the user asked for the migration and would otherwise
 		// see nothing at all happen.
@@ -1572,6 +1576,13 @@ func adaptProject(stderr io.Writer, o *orchestrator.Orchestrator, dryRun bool, n
 	// hand-written compose.opossum.yml — which takes precedence, silently making
 	// the user's file inert.
 	if existing := compose.DiscoverOpossumOverlay(o.Project.BaseDir); existing != "" {
+		// A file opossum wrote is added to rather than left behind: what it has
+		// found since that needs no decision goes on the end, and the run uses it.
+		if orchestrator.GeneratedOverlay(existing) {
+			if next, handled := appendToGeneratedOverlay(stderr, o, existing, dryRun, named); handled {
+				return next, nil
+			}
+		}
 		if len(changes) > 0 {
 			// Say so rather than skipping in silence: the user asked for the fixes
 			// and would otherwise hit the failure with no idea one was available.
@@ -1640,8 +1651,106 @@ func adaptProject(stderr io.Writer, o *orchestrator.Orchestrator, dryRun bool, n
 		return nil, nil
 	}
 	reportOverlay(stderr, "wrote", changes)
+	o.RecordWrittenKeys(changes)
 
 	return loadOrchestrator(o.Out())
+}
+
+// appendToGeneratedOverlay adds the applied changes found since an overlay
+// opossum wrote to the end of it, as a second document, and returns the project
+// reloaded with them. handled is false when there was nothing to add or it could
+// not be done, and the caller then says what it always said.
+//
+// Only the applied ones go in: a suggestion or a note is for the reader to look
+// at, and what is already in the file — edited or not — is not touched. The
+// result is checked the way a fresh overlay is, by loading it, before it
+// replaces the file.
+func appendToGeneratedOverlay(stderr io.Writer, o *orchestrator.Orchestrator, existing string, dryRun bool, named []string) (next *orchestrator.Orchestrator, handled bool) {
+	appendix, appended, left, kept, _ := o.PlanAppendixFor(named)
+	if appendix == "" && len(kept) == 0 {
+		return nil, false
+	}
+	base := filepath.Base(existing)
+	reportLeft := func() {
+		if len(kept) > 0 {
+			fmt.Fprintf(stderr, "opossum: not added again, because %s had them or may have had them taken out on purpose:\n", base)
+			reportEntries(stderr, kept)
+		}
+		if len(left) > 0 {
+			fmt.Fprintf(stderr, "opossum: found more in %s that is not added, because it needs your decision:\n", base)
+			reportEntries(stderr, left)
+			fmt.Fprintf(stderr, "opossum: `rm %s && opossum up --from-docker-compose%s%s` writes them into a fresh file. "+
+				"Any edits you made to it would go too.\n", base, thisRunFlags(), serviceArgs(named))
+		}
+	}
+	if appendix == "" {
+		reportLeft()
+		return nil, true
+	}
+	// A link is not replaced by a file of its own: what it points at is the
+	// reader's, and writing through it is not what was asked either.
+	if st, err := os.Lstat(existing); err != nil || st.Mode()&os.ModeSymlink != 0 {
+		return nil, false
+	}
+	have, err := os.ReadFile(existing)
+	if err != nil {
+		return nil, false
+	}
+	text := string(have)
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	text += appendix
+	if dryRun {
+		fmt.Fprintf(stderr, "opossum: would add %d change(s) to the end of %s — so this project runs on Apple container:\n", len(appended), base)
+		for _, c := range appended {
+			entryLine(stderr, c)
+		}
+		reportLeft()
+		next, _ = reloadWith(stderr, o, text)
+		return next, true
+	}
+	if err := replaceOverlay(o.Project.BaseDir, existing, text); err != nil {
+		fmt.Fprintf(stderr, "opossum: couldn't add to %s (%v) — it is as it was\n", base, err)
+		return nil, false
+	}
+	fmt.Fprintf(stderr, "opossum: added %d change(s) to the end of %s — so this project runs on Apple container:\n", len(appended), base)
+	for _, c := range appended {
+		entryLine(stderr, c)
+	}
+	o.RecordWrittenKeys(appended)
+	reportLeft()
+	next, err = loadOrchestrator(o.Out())
+	if err != nil {
+		fmt.Fprintf(stderr, "opossum: added them, but the project could not be read again (%v) — this run goes on without them\n", err)
+		return nil, true
+	}
+	return next, true
+}
+
+// replaceOverlay puts text in place of the overlay at path, once it is shown to
+// load: written beside it, merged as the candidate overlay, then renamed over it,
+// so a failure at any step leaves the file as it was.
+func replaceOverlay(dir, path, text string) error {
+	tmp, err := os.CreateTemp(dir, ".compose.opossum.*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(text); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := checkOverlayResolves(dir, tmp.Name()); err != nil {
+		return fmt.Errorf("the result did not resolve: %w", err)
+	}
+	if st, err := os.Stat(path); err == nil {
+		_ = os.Chmod(tmp.Name(), st.Mode().Perm()) // keep the file's own mode
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // writeOverlay lands the overlay in dir, atomically and without clobbering.

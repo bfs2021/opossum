@@ -189,7 +189,7 @@ func TestAStoppedDependencyNamesTheCodeAndTheState(t *testing.T) {
 	o := New(p, rt, "opossum", &bytes.Buffer{})
 	o.sleep = func(time.Duration) {}
 
-	err := o.waitHealthy("db", &compose.Healthcheck{Test: []string{"CMD", "true"}, Retries: 1})
+	err := o.waitHealthy("db", &compose.Healthcheck{Interval: time.Millisecond, Test: []string{"CMD", "true"}, Retries: 1})
 	if err == nil {
 		t.Fatal("a dependency that has exited will not become healthy")
 	}

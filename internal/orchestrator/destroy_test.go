@@ -144,7 +144,8 @@ func TestStartedIsMeasuredNotRemembered(t *testing.T) {
 		"db": {
 			Image: "db",
 			Healthcheck: &compose.Healthcheck{
-				Test: []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1,
+				Interval: time.Millisecond, // a test never waits the 30 s a healthcheck without one gets
+				Test:     []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1,
 			},
 		},
 		"web": {
@@ -198,7 +199,8 @@ func TestStartedListsWhatSurvivedARollback(t *testing.T) {
 		"db": {
 			Image: "db",
 			Healthcheck: &compose.Healthcheck{
-				Test: []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1,
+				Interval: time.Millisecond, // a test never waits the 30 s a healthcheck without one gets
+				Test:     []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1,
 			},
 		},
 		"web": {
@@ -276,7 +278,8 @@ func TestStartedExcludesWhatTheRollbackTriedToRemove(t *testing.T) {
 			Image:   "db",
 			Restart: "always",
 			Healthcheck: &compose.Healthcheck{
-				Test: []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1,
+				Interval: time.Millisecond, // a test never waits the 30 s a healthcheck without one gets
+				Test:     []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1,
 			},
 		},
 		"web": {
@@ -342,7 +345,8 @@ func TestStartedListsAStoppedSurvivor(t *testing.T) {
 		"db": {
 			Image: "db",
 			Healthcheck: &compose.Healthcheck{
-				Test: []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1,
+				Interval: time.Millisecond, // a test never waits the 30 s a healthcheck without one gets
+				Test:     []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1,
 			},
 		},
 		"web": {
@@ -381,7 +385,7 @@ func TestStartedAfterARollbackStaysWithinTheSelectedServices(t *testing.T) {
 	setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
 	p := project("demo", map[string]*compose.Service{
 		"db":    {Image: "db", Restart: "always"},
-		"probe": {Image: "probe", Healthcheck: &compose.Healthcheck{Test: []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1}},
+		"probe": {Image: "probe", Healthcheck: &compose.Healthcheck{Interval: time.Millisecond, Test: []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1}},
 		"web":   {Image: "web", Restart: "always", DependsOn: compose.DependsOn{{Name: "probe", Condition: compose.ConditionHealthy}}},
 	})
 	o := orchestrator.New(p, rt, "opossum", &bytes.Buffer{})

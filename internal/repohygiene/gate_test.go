@@ -280,8 +280,9 @@ func TestTheTwoJobsKeepTheirPromises(t *testing.T) {
 	// so that a `continue-on-error` or a `needs` on the job — its red read
 	// as green, or the jobs put back in a line — is a key that is not on
 	// the list.
-	allowed(t, "the stable job", stable, "runs-on", "env", "steps")
-	for _, key := range []string{"runs-on", "env"} {
+	allowed(t, "the stable job", stable, "runs-on", "env", "steps", "timeout-minutes")
+	checkJobTimeout(t, "the stable job", stable)
+	for _, key := range []string{"runs-on", "env", "timeout-minutes"} {
 		if a, b := fmt.Sprint(ci[key]), fmt.Sprint(stable[key]); a != b {
 			t.Errorf("the two jobs differ in %s (%q vs %q); what decides whether a job runs, and where, is the same for both or one of them is not the twin the other's promises assume", key, a, b)
 		}
@@ -692,7 +693,8 @@ func readGate(t *testing.T, root string) gate {
 	// environment the job hands every script is pinned for the same reason
 	// the keys are: a variable added here reaches the gate's script too, and
 	// this check would be running that script without it.
-	allowed(t, "the job", job, "runs-on", "env", "steps")
+	allowed(t, "the job", job, "runs-on", "env", "steps", "timeout-minutes")
+	checkJobTimeout(t, "the job", job)
 	jobEnv, _ := job["env"].(map[string]any)
 	if len(jobEnv) != 1 || jobEnv["GOTOOLCHAIN"] != "local" {
 		t.Fatalf("the job hands every script env %v; this check knows GOTOOLCHAIN=local and nothing else", jobEnv)
@@ -1019,4 +1021,20 @@ func releaseTarget(t *testing.T, root string) (main, goos, goarch string) {
 	return one(`(?m)^\s+main:\s+(\S+)`, "built binary"),
 		one(`(?m)^\s+goos:\n\s+- (\S+)`, "target OS"),
 		one(`(?m)^\s+goarch:\n\s+- (\S+)`, "target architecture")
+}
+
+// A job that has no limit of its own runs for six hours, and a hung test run
+// would hold the one runner that long. The limit has two edges: at least 40,
+// so a slow green is not cut (the longest job measured took 17 minutes, and a
+// `go test` package may take 30 of its own), and at most 60, so it is a bound.
+// Only these edges are pinned — the figure inside them is a choice.
+func checkJobTimeout(t *testing.T, what string, job map[string]any) {
+	t.Helper()
+	n, ok := job["timeout-minutes"].(int)
+	if !ok {
+		t.Fatalf("%s has no integer `timeout-minutes` (it has %#v); without one a hung run holds the runner for 360 minutes", what, job["timeout-minutes"])
+	}
+	if n < 40 || n > 60 {
+		t.Fatalf("%s stops at %d minutes: it has to stay at 40 or more (a `go test` package's 30 and the steps before it) so a slow green is not cut, and at or below 60 so it is a bound", what, n)
+	}
 }

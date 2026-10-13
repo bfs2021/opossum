@@ -39,11 +39,11 @@
 # dependable under WSL): the go command rewrites a used file's mtime, but only
 # when it is more than an hour old, so a file whose mtime is more than 180
 # minutes old was last used at least 120 minutes ago, and is not one a job of
-# a run that takes a quarter of an hour can be holding. (That last step is an
+# a run that takes under twenty minutes can be holding. (That last step is an
 # inference from the go command's source, not a measurement: deleting files of
 # any age under a running build did not fail it either. It reaches as far as a
-# job that does not stall: a job has no `timeout-minutes`, and one stalled for
-# more than two hours can have files taken from under it.)
+# job that stalls too, since a job stops at its `timeout-minutes`, well inside
+# the two hours.)
 #
 # GOMODCACHE is not touched. Its files are read by path while a build runs,
 # nothing in them says whether a job still reads them, and a file deleted
@@ -81,8 +81,9 @@ for v in "$max_gib" "$warn_gib" "$min_age" "$df_wait"; do
 done
 
 # `/mnt/c` is a mount of the Windows drive (9p), and a drive that is stuck can
-# leave `stat`/`statfs` on it waiting. A job has no `timeout-minutes`, so the
-# two calls that touch it are bounded: a wait that ends is no warning, and the
+# leave `stat`/`statfs` on it waiting. A job stops only at its
+# `timeout-minutes`, far longer than a wait on it should be, so the two calls
+# that touch it are bounded: a wait that ends is no warning, and the
 # size below decides as it always does. (Without `timeout` on the machine they
 # run unbounded.)
 bounded() {

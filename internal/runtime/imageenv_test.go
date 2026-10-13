@@ -136,3 +136,51 @@ func TestImageEnvKeepsStderrOutOfTheAnswerAndOffTheScreen(t *testing.T) {
 		t.Errorf("the runtime's stderr should not reach the screen here, got: %q", printed)
 	}
 }
+
+// ImageFacts is the one inspect that environment and architectures are read from.
+// The fixtures are real output: a Postgres image pulled on this Mac lists arm64,
+// and the two-variant one lists both builds in the order the runtime printed them.
+func TestImageFactsReadsTheArchitecturesTheImageListsAndItsEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		fixture string
+		archs   []string
+	}{
+		{"../../testdata/image-inspect/postgres17.json", []string{"arm64"}},
+		{"../../testdata/image-inspect/two-variants-second-declares-workdir.json", []string{"amd64", "arm64"}},
+	} {
+		facts, ok := imageInspectShim(t, tc.fixture).ImageFacts("x")
+		if !ok {
+			t.Fatalf("%s: the image answered; it should be read", tc.fixture)
+		}
+		if strings.Join(facts.Archs, ",") != strings.Join(tc.archs, ",") {
+			t.Errorf("%s: architectures %v, want %v", tc.fixture, facts.Archs, tc.archs)
+		}
+		if len(facts.Env) == 0 {
+			t.Errorf("%s: the environment was not read from the same answer", tc.fixture)
+		}
+	}
+	if _, ok := imageInspectShim(t, "").ImageFacts("nope"); ok {
+		t.Error("an image that is not here cannot be asked")
+	}
+}
+
+// The variants of one image are the same image built for different machines: the
+// first value for a name wins, and an architecture is listed once.
+func TestImageFactsTakesTheFirstValueOfAnEnvironmentNameAndListsAnArchitectureOnce(t *testing.T) {
+	doc := `[{"variants":[` +
+		`{"platform":{"architecture":"arm64"},"config":{"config":{"Env":["A=first","B=1"]}}},` +
+		`{"platform":{"architecture":"amd64"},"config":{"config":{"Env":["A=second"]}}},` +
+		`{"platform":{"architecture":"arm64"},"config":{"config":{"Env":["A=third"]}}}]}]`
+	file := filepath.Join(t.TempDir(), "doc.json")
+	writeShimFile(t, file, doc)
+	facts, ok := imageInspectShim(t, file).ImageFacts("x")
+	if !ok {
+		t.Fatal("not read")
+	}
+	if facts.Env["A"] != "first" || facts.Env["B"] != "1" {
+		t.Errorf("environment %v: the first value of a name should win", facts.Env)
+	}
+	if strings.Join(facts.Archs, ",") != "arm64,amd64" {
+		t.Errorf("architectures %v, want each once in order", facts.Archs)
+	}
+}

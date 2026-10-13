@@ -69,6 +69,7 @@ const (
 	codeImageNoArm64            diagCode = "OPSM-412" // the image has no arm64 build, so the container cannot start here
 	codeOptionalDependency      diagCode = "OPSM-413" // a `required: false` dependency did not become healthy or did not complete; the dependent starts anyway
 	codeSupervisorStopFailed    diagCode = "OPSM-414" // asked the restart supervisor to stop but couldn't confirm it did within budget, or could not check it (`ps` would not answer) and did not ask
+	codeRegistryRefused         diagCode = "OPSM-415" // the runtime refuses to pull from this registry (lscr.io), where docker compose does not
 	codeServiceExited           diagCode = "OPSM-407" // a service's container exited right after starting (no health gate)
 	codeIgnoredTopField         diagCode = "OPSM-501" // unsupported top-level compose field(s), ignored
 	codeIgnoredField            diagCode = "OPSM-502" // unsupported service compose field(s), ignored
@@ -89,7 +90,7 @@ var allDiagCodes = []diagCode{
 	codeNetworkSubnetChanged, codeProjectBusy, codeServiceNameUnresolvable, codeExternalVolumeAbsent, codeSecondNetworkName,
 	codeHostPortNotPlaced, codeHostPortTwice, codeHostAddressUnbindable, codeHostPortNotBindable,
 	codeDepNotRunning, codeOrphans, codeDepNoHealth,
-	codeIgnoredTopField, codeIgnoredField, codeRuntimeAbsent, codeRuntimeStopped, codeRuntimeAutoStart, codeServiceExited, codeSupervisorStarted, codeSupervisorAction, codeImageNoArm64, codeOptionalDependency,
+	codeIgnoredTopField, codeIgnoredField, codeRuntimeAbsent, codeRuntimeStopped, codeRuntimeAutoStart, codeServiceExited, codeSupervisorStarted, codeSupervisorAction, codeImageNoArm64, codeOptionalDependency, codeRegistryRefused,
 	codeSupervisorLogTrimmed, codeSupervisorLogUncapped, codeSupervisorStopFailed,
 	codeWatchRebuild, codeWatchRestart, codeWatchSync, codeWatchSetup, codeWatchError,
 }

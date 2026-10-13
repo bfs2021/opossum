@@ -1559,6 +1559,11 @@ func TestASuggestionFromACrashIsPrintedWhenAnOverlayAlreadyExists(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
+	// Data in it: an empty directory would be swapped without asking, and added
+	// to the overlay rather than put on screen.
+	if err := os.WriteFile(filepath.Join(dir, "rdata", "dump.rdb"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(
 		"name: demo\nservices:\n  cache:\n    image: redis:7-alpine\n    volumes:\n      - ./rdata:/data\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -5524,7 +5529,9 @@ func TestDestroyAsksBeforeItSaysWhatItLeaves(t *testing.T) {
 // telling someone to delete a hand-written overlay is telling them to throw work
 // away, which is the mistake this branch exists to stop repeating.
 func TestFromDockerComposeAdviceDependsOnWhoWroteTheOverlay(t *testing.T) {
-	const compose = "name: demo\nservices:\n  db:\n    image: postgres:16\n    volumes:\n      - ./pgdata:/var/lib/postgresql/data\n"
+	// What is found here must be a suggestion: an applied change is added to an
+	// overlay opossum wrote, and then there is no advice to check.
+	const compose = "name: demo\nservices:\n  web:\n    image: busybox\n    volumes:\n      - shared:/srv\n  worker:\n    image: busybox\n    volumes:\n      - shared:/srv\nvolumes:\n  shared: {}\n"
 	for _, tc := range []struct {
 		name, overlay  string
 		wantSubstrings []string
@@ -7424,8 +7431,9 @@ func TestTheRewriteAdviceRepeatsThisRunsProfiles(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(
 		"name: prof\nservices:\n  pg:\n    image: postgres:16\n    volumes:\n      - pg:/var/lib/postgresql/data\n"+
-			"  db:\n    image: postgres:16\n    profiles: [debug]\n    volumes:\n      - pgdata:/var/lib/postgresql/data\n"+
-			"volumes:\n  pg: {}\n  pgdata: {}\n"), 0o644); err != nil {
+			"  a:\n    image: busybox\n    profiles: [debug]\n    volumes:\n      - shared:/srv\n"+
+			"  b:\n    image: busybox\n    profiles: [debug]\n    volumes:\n      - shared:/srv\n"+
+			"volumes:\n  pg: {}\n  shared: {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
@@ -7438,8 +7446,8 @@ func TestTheRewriteAdviceRepeatsThisRunsProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(first), "\"db\"") {
-		t.Fatalf("db was not part of the first run, so the overlay should not hold it:\n%s", first)
+	if strings.Contains(string(first), "\"a\"") {
+		t.Fatalf("a was not part of the first run, so the overlay should not hold it:\n%s", first)
 	}
 
 	// With the profile: found more, and the advice names the profile.
@@ -7447,15 +7455,15 @@ func TestTheRewriteAdviceRepeatsThisRunsProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("up --profile debug: %v", err)
 	}
-	if !strings.Contains(out, "found more") || !strings.Contains(out, "[OPSM-101] service \"db\"") {
-		t.Fatalf("the run with the profile should find db's entry missing:\n%s", out)
+	if !strings.Contains(out, "found more") || !strings.Contains(out, "service \"a\" shares named volume") {
+		t.Fatalf("the run with the profile should find a's entry missing:\n%s", out)
 	}
 	const advice = "`rm compose.opossum.yaml && opossum up --from-docker-compose --profile debug`"
 	if !strings.Contains(out, advice) {
 		t.Errorf("the rewrite advice should repeat this run's profile, got:\n%s\nwant: %s", out, advice)
 	}
 
-	// Followed to the letter: the rewrite holds db.
+	// Followed to the letter: the rewrite holds a.
 	if err := os.Remove(filepath.Join(dir, "compose.opossum.yaml")); err != nil {
 		t.Fatal(err)
 	}
@@ -7466,8 +7474,8 @@ func TestTheRewriteAdviceRepeatsThisRunsProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(second), "service \"db\"") {
-		t.Errorf("following the advice should write db's entry, got:\n%s", second)
+	if !strings.Contains(string(second), "service \"a\"") {
+		t.Errorf("following the advice should write a's entry, got:\n%s", second)
 	}
 }
 

@@ -2396,8 +2396,8 @@ func healthyDepsProject() *compose.Project {
 		"db": {
 			Image: "postgres:16",
 			Healthcheck: &compose.Healthcheck{
+				Interval: time.Millisecond, // a test never waits the 30 s a healthcheck without one gets
 				Test:     []string{"pg_isready"},
-				Interval: time.Millisecond, // keep the eval fast
 				Retries:  5,
 			},
 		},
@@ -2448,9 +2448,10 @@ func TestUpHealthProbeTimeoutDoesNotHang(t *testing.T) {
 		"db": {
 			Image: "postgres:16",
 			Healthcheck: &compose.Healthcheck{
-				Test:    []string{"pg_isready"},
-				Timeout: 150 * time.Millisecond, // per-attempt bound
-				Retries: 2,
+				Interval: time.Millisecond, // a test never waits the 30 s a healthcheck without one gets
+				Test:     []string{"pg_isready"},
+				Timeout:  150 * time.Millisecond, // per-attempt bound
+				Retries:  2,
 			},
 		},
 		"web": {
@@ -2481,8 +2482,8 @@ func TestUpRollsBackOnInterrupt(t *testing.T) {
 		"db": {
 			Image: "postgres:16",
 			Healthcheck: &compose.Healthcheck{
+				Interval: time.Millisecond, // a test never waits the 30 s a healthcheck without one gets
 				Test:     []string{"pg_isready"},
-				Interval: 5 * time.Millisecond,
 				Retries:  1_000_000,
 				Timeout:  time.Second,
 			},
@@ -3046,8 +3047,8 @@ func TestUpFailsWhenDependencyNeverHealthy(t *testing.T) {
 		"db": {
 			Image: "postgres:16",
 			Healthcheck: &compose.Healthcheck{
+				Interval: time.Millisecond, // a test never waits the 30 s a healthcheck without one gets
 				Test:     []string{"pg_isready"},
-				Interval: time.Millisecond,
 				Retries:  2,
 			},
 		},
@@ -4388,9 +4389,10 @@ func TestStartedIsEmptyAfterARolledBackUp(t *testing.T) {
 			Image:   "postgres:16",
 			Restart: "always",
 			Healthcheck: &compose.Healthcheck{
-				Test:    []string{"pg_isready"},
-				Timeout: 100 * time.Millisecond,
-				Retries: 1,
+				Interval: time.Millisecond, // a test never waits the 30 s a healthcheck without one gets
+				Test:     []string{"pg_isready"},
+				Timeout:  100 * time.Millisecond,
+				Retries:  1,
 			},
 		},
 		"web": {

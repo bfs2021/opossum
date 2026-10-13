@@ -1485,7 +1485,7 @@ func loadFilesEnvDir(paths []string, envFiles []string, envDir string, soft bool
 		// service is one of those is not knowable here — profiles are applied a
 		// layer up. Whoever renders or starts it asks through ResolvedEnv, which
 		// answers with this error.
-		env, err := resolveEnvFiles(baseDir, svc.EnvFile, svc.Environment, scope)
+		env, err := resolveEnvFiles(baseDir, svc.EnvFile, resolveBareFromProject(svc.Environment, scope), scope)
 		if err != nil {
 			svc.envFileErr = fmt.Errorf("service %q: %w", name, err)
 		} else {

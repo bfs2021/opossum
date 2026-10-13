@@ -336,22 +336,26 @@ volumes:
 `
 	o := New(loadProject(t, body), &runtime.Runtime{Bin: shim}, "opossum", io.Discard)
 	o.PlanOverlay()
-	asked := 0
+	// Every image is asked once: its environment (the Postgres ones' data
+	// directory) and the architectures it has come from the same inspect, so
+	// three services on one image, a mount below the data directory that is
+	// considered and passed over, and a named volume whose comment asks too are
+	// still one question, not five.
+	asked := map[string]int{}
 	if b, err := os.ReadFile(log); err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
 			if strings.HasPrefix(line, "image inspect") {
-				asked++
-				if !strings.Contains(line, "postgres") {
-					t.Errorf("nothing to ask about %q — it is not a Postgres image", line)
-				}
+				asked[line]++
 			}
 		}
 	}
-	// Three services on the same image, a mount below the data directory that is
-	// considered and passed over, and a named volume whose comment asks too: one
-	// question, not five.
-	if asked != 1 {
-		t.Errorf("one image between them, asked %d times", asked)
+	for _, image := range []string{"myorg/api:1.2", "mongo:7", "postgres:17-alpine", "nginx:alpine"} {
+		if n := asked["image inspect "+image]; n != 1 {
+			t.Errorf("%s asked %d times, want once (all asks: %v)", image, n, asked)
+		}
+	}
+	if len(asked) != 4 {
+		t.Errorf("%d distinct images asked about, want the 4 the project has: %v", len(asked), asked)
 	}
 }
 

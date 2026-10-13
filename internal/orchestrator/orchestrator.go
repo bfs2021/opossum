@@ -55,9 +55,16 @@ type Orchestrator struct {
 	// afterUpLocked is what `up` runs when it is done (whatever it came to), before it lets go of the project's lock: the
 	// start of the restart supervisor, which has to be in place, claimed, before a `down` can be let in (#1740).
 	afterUpLocked func(upErr error)
-	// imageEnvs remembers what each image declared, so planning an overlay asks the
-	// runtime once per image rather than once per mount it considers.
-	imageEnvs map[string]map[string]string
+	// imageFactsMemo remembers what each image declared, so planning an overlay asks the
+	// runtime about an image once (its environment and the architectures it has come
+	// from the same inspect), not once for every mount or service that considers it.
+	imageFactsMemo map[string]imageFactsAnswer
+	// planPullsOff is set where an overlay is planned but will not be written, so
+	// planning must not pull an image to read it (see SetPlanPulls); planNamed is the
+	// services a run named, which are the ones it pulls for.
+	planPullsOff bool
+	planNamed    map[string]bool
+	planArch     map[string]archOfImage // what asking each image for its builds came to, so a plan asks each once
 	// imageWorkdirs remembers where each image starts its process, for the same
 	// reason: a crash decode asks once per image, not once per mount.
 	imageWorkdirs map[string]string
@@ -69,6 +76,7 @@ type Orchestrator struct {
 	rt             *runtime.Runtime
 	out            interface{ Write([]byte) (int, error) }
 	sleep          func(time.Duration) // overridable so tests don't wait in real time
+	now            func() time.Time    // the clock a healthcheck wait counts its start period by; overridable with sleep
 	// holdPort binds one host port and holds it until the closer runs: port 0
 	// asks the operating system to choose, any other number asks whether that
 	// one can be bound. Overridable so a test can answer with a port the
@@ -167,7 +175,7 @@ func (o *Orchestrator) removeOrphans(orphans []string) {
 
 // New builds an Orchestrator writing user-facing output to w.
 func New(p *compose.Project, rt *runtime.Runtime, dnsDomain string, w interface{ Write([]byte) (int, error) }) *Orchestrator {
-	return &Orchestrator{Project: p, DNSDomain: dnsDomain, rt: rt, out: w, sleep: time.Sleep,
+	return &Orchestrator{Project: p, DNSDomain: dnsDomain, rt: rt, out: w, sleep: time.Sleep, now: time.Now,
 		holdPort: holdHostPort, bindHostAddress: bindHostAddress, probeHostPort: bindHostPort,
 		ctx: context.Background(), crashGrace: graceFromEnv()}
 }
@@ -235,6 +243,12 @@ func (o *Orchestrator) SetDryRun(v bool) {
 	o.up.dryRun = v
 	o.rt.DryRun = v
 }
+
+// SetPlanPulls says whether planning an overlay may pull an image to read the
+// builds it has. It may by default; the command turns it off where the plan is
+// only shown — under --dry-run, with an overlay already in place, or with -f —
+// because a pull there is a download for a result nobody acts on.
+func (o *Orchestrator) SetPlanPulls(v bool) { o.planPullsOff = !v }
 
 // SetRunFlags records the root flags this run was given, spelled as typed
 // (" -f x.yaml -p name"), for a command the output suggests: it has to carry
@@ -5014,32 +5028,62 @@ func probeTimeout(hc *compose.Healthcheck) time.Duration {
 	return hc.Timeout
 }
 
-// waitHealthy runs a service's healthcheck via `container exec`, retrying up to
-// Retries times with Interval between attempts, after an initial StartPeriod.
+// healthStartInterval is how often docker compose probes while a healthcheck is
+// inside its start period (its `start_interval`, which has no setting here): five
+// seconds, or the interval when that is shorter.
+const healthStartInterval = 5 * time.Second
+
+// defaultHealthInterval is the interval of a healthcheck that gives none or gives
+// zero, as docker compose reads it.
+const defaultHealthInterval = 30 * time.Second
+
+// waitHealthy runs a service's healthcheck via `container exec` until it passes.
+//
+// It probes from the start, and a probe that passes is healthy at once, whenever
+// it passes — including inside the StartPeriod. The StartPeriod is a grace for
+// failures: a probe that fails before it has run out does not count against
+// Retries, and after it Retries failures in a row make the check fail. Probes
+// come every five seconds (or the interval, if shorter) while the grace lasts and
+// every Interval after it, as docker compose spaces them (measured, v5.5.1). This
+// used to sleep the whole StartPeriod before the first probe, so a database that
+// was ready in 25 seconds behind `start_period: 1m` was waited on for a minute —
+// and a service with two such dependencies for two.
+//
+// The grace is counted from the start of this wait by the clock o.now reads, so a
+// slow probe uses it up as time passing does. (docker counts it from the
+// container's start; for a second dependency waited on after the first, this is
+// the more patient of the two, never a false pass.)
 func (o *Orchestrator) waitHealthy(name string, hc *compose.Healthcheck) error {
 	cname := o.containerName(name)
-	if hc.StartPeriod > 0 {
-		o.sleep(hc.StartPeriod)
-	}
 	attempts := hc.Retries
 	if attempts < 1 {
 		attempts = 1
 	}
+	interval := hc.Interval
+	if interval <= 0 {
+		interval = defaultHealthInterval
+	}
+	start := o.now()
 	var last error
-	for i := 0; i < attempts; i++ {
+	failures := 0
+	for first := true; ; first = false {
 		// A Ctrl-C during a long health wait should abort into rollback, not keep
 		// probing.
 		if err := o.interrupted(); err != nil {
 			return err
 		}
-		if i > 0 {
-			o.sleep(hc.Interval)
+		if !first {
+			pace := interval
+			if o.now().Sub(start) < hc.StartPeriod && pace > healthStartInterval {
+				pace = healthStartInterval
+			}
+			o.sleep(pace)
 		}
-		if err := o.rt.Exec(cname, hc.Test, probeTimeout(hc)); err == nil {
+		err := o.rt.Exec(cname, hc.Test, probeTimeout(hc))
+		if err == nil {
 			return nil
-		} else {
-			last = err
 		}
+		last = err
 		// If the container has exited, it won't recover by polling — fail fast
 		// with the real cause instead of an opaque "healthcheck did not pass".
 		if info := o.rt.Inspect(cname); info.Exists && info.State != "" && info.State != "running" {
@@ -5053,8 +5097,13 @@ func (o *Orchestrator) waitHealthy(name string, hc *compose.Healthcheck) error {
 			}
 			return fmt.Errorf("[%s] container is not running (state %q)", codeDepNotRunning, info.State)
 		}
+		if o.now().Sub(start) >= hc.StartPeriod {
+			failures++
+			if failures >= attempts {
+				return fmt.Errorf("healthcheck did not pass after %d attempt(s): %w", failures, last)
+			}
+		}
 	}
-	return fmt.Errorf("healthcheck did not pass after %d attempt(s): %w", attempts, last)
 }
 
 // Down stops and removes every service in reverse dependency order, deletes the
@@ -8982,6 +9031,12 @@ func (o *Orchestrator) ensureBindDirs(service string, vols []string, redo string
 		}
 		src := o.resolvePath(mount)
 		if _, err := os.Stat(src); !os.IsNotExist(err) {
+			continue
+		}
+		if made, perr := o.materializePlaceholder(src); made || perr != nil {
+			if perr != nil {
+				return fmt.Errorf("[%s] service %q: could not make the stand-in file %s: %v", codeBindDirCreate, service, src, perr)
+			}
 			continue
 		}
 		if mkErr := os.MkdirAll(src, 0o755); mkErr != nil {

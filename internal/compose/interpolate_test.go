@@ -1889,7 +1889,10 @@ func TestAnEnvFileErrorNamesThePlaceNotTheContents(t *testing.T) {
 	unsetHostVars(t, "K", "OUT")
 	const secret = "ghp-canary-do-not-print"
 	for _, tc := range []struct{ name, dotenv, wantIn string }{
-		{"a line with no separator", secret + "\n", "expected KEY=VALUE"},
+		// A line with no separator is a name on its own (docker compose reads it so),
+		// and is held to the rules for a name: one with punctuation in it is
+		// refused, without reading it back.
+		{"a line with no separator and a character a name cannot have", secret + "/x\n", "unexpected character"},
 		{"a quoted value that never closes", "K=\"" + secret + "\n", "unterminated quoted value"},
 		{"no name in front of the separator", "=" + secret + "\n", "empty variable name"},
 		// A token pasted with a word before it is a name with a space in it, and
@@ -1922,6 +1925,8 @@ func TestAnEnvFileErrorNamesThePlaceNotTheContents(t *testing.T) {
 		{"a colon instead of an equals", "K:" + secret + "\n", secret},
 		{"an exported line", "export K=" + secret + "\n", secret},
 		{"a comment that has no separator", "# " + secret + "\nK=v\n", "v"},
+		// Read as a name that nothing sets: nothing is passed, and the line after it is read.
+		{"a name on its own that nothing sets", secret + "\nK=v\n", "v"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := writeProject(t, "services:\n  app:\n    image: app\n    environment:\n      OUT: ${K}\n", tc.dotenv)

@@ -878,7 +878,8 @@ func uncommentSuggestions(body string) string {
 		}
 		if inSuggestions {
 			if strings.HasPrefix(line, "# opossum did NOT") || strings.HasPrefix(line, "# the call is") ||
-				strings.HasPrefix(line, "# line included") {
+				strings.HasPrefix(line, "# line included") || strings.HasPrefix(line, "# It starts with") ||
+				strings.HasPrefix(line, "# entries above") {
 				continue // the section preamble, not part of the YAML
 			}
 			out = append(out, strings.TrimPrefix(strings.TrimPrefix(line, "# "), "#"))
@@ -1269,7 +1270,11 @@ services:
 			t.Errorf("nothing here has failed, so nothing should be proposed — got %+v", c)
 		}
 	}
-	if strings.Contains(body, suggestionMarker) {
+	// The overlay's header names every kind of entry, the suggestion marker
+	// included, so the marker alone is in any overlay at all — here there is
+	// one, for the lscr.io names. The section a suggestion lives in is what
+	// would be absent.
+	if strings.Contains(body, "── Suggestions") {
 		t.Errorf("the overlay should carry no suggestion, got:\n%s", body)
 	}
 }
@@ -1285,6 +1290,7 @@ func TestPlanOverlayProposesTheMountThatActuallyDied(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	holdData(t, dir, "db") // data in it keeps the swap a suggestion
 	writeFile(t, dir, "compose.yaml", `
 name: demo
 services:
@@ -1372,6 +1378,7 @@ func TestPlanOverlayProposesForRedisOnceItHasActuallyDied(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "rdata"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	holdData(t, dir, "rdata")
 	writeFile(t, dir, "compose.yaml", `
 name: demo
 services:
@@ -1778,9 +1785,7 @@ services:
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.MkdirAll(filepath.Join(dir, "pgdata"), 0o755); err != nil {
-				t.Fatal(err)
-			}
+			holdData(t, dir, "pgdata")
 			writeFile(t, dir, "compose.yaml", tc.compose)
 			p0, err := compose.Load(filepath.Join(dir, "compose.yaml"))
 			if err != nil {
@@ -1965,6 +1970,7 @@ func suggestionBlockOf(t *testing.T, overlay string) string {
 // and comments for the changes opossum did apply. Nothing here reads those.
 func TestTheSuggestionsAreWordForWordWhatWeMeanToSay(t *testing.T) {
 	dir := t.TempDir()
+	holdData(t, dir, "content")
 	// Both kinds of suggestion in one project, because the section is what this
 	// pins: a service that died chowning a bind mount, and a pair that cannot both
 	// attach the same named volume. A golden over only one of them leaves the other
@@ -2268,5 +2274,19 @@ volumes:
 	_, changes, gated = o.PlanOverlayFor([]string{"db"})
 	if len(changes) == 0 || len(gated) != 0 {
 		t.Errorf("naming db enables it, as under docker compose: changes=%d gated=%v", len(changes), gated)
+	}
+}
+
+// holdData makes dir/sub a directory with something in it: the state in which
+// moving the mount into a volume would leave data behind, so the swap stays a
+// suggestion.
+func holdData(t *testing.T, dir, sub string) {
+	t.Helper()
+	d := filepath.Join(dir, sub)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "keep"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
