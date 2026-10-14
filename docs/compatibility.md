@@ -16,11 +16,13 @@ the same facts, written for a context window rather than a person.
 | Figure | Value |
 |---|---|
 | Projects measured | 156 |
-| Ran completely, as written | 52 (33%) |
-| Ran completely with `--from-docker-compose` | 66 (42%) |
+| Ran completely, as written | 50 (32%) |
+| Ran completely with `--from-docker-compose` | 86 (55%) |
 | Projects made worse by `--from-docker-compose` | 0 |
 
-Measured in October 2026, on the `main` that followed v0.45.0, on a Mac running `container` 1.5.0. The same corpus was run the same day with v0.16.0, the release the figures of 30 July 2026 came from: it gave 51 and 67, so between the two builds the result moved by one project either way. The 30 July figures (61 and 78) are not a baseline for these: with the older build the same host now gives fewer, so the difference is the host and what the upstream images and registries serve today, not opossum.
+Measured in October 2026, on v0.47.0, on a Mac running `container` 1.5.0. The same corpus was run the same day with v0.16.0, the release the figures of 30 July 2026 came from: it gave 49 and 66. So `up` as written is about the same between the two builds (49 and 50), and `--from-docker-compose` moved from 66 to 86 on the first run, 94 with a second. The 30 July figures (61 and 78) are not a baseline for these: with the older build the same host now gives fewer, so the difference is the host and what the upstream images and registries serve today, not opossum.
+
+The second run is a `down` (without `-v`) and another `up --from-docker-compose`, done for the 70 projects the first run did not finish; it adds 8. What it picks up is what a failed first start can only teach: a service that died taking ownership of an empty bind-mounted directory is moved onto a named volume, and that is added to the overlay the first run wrote.
 
 "Ran completely" means every service the project declares was running when `up`
 returned. It does not mean the application works: a running container can still be
@@ -55,12 +57,12 @@ effect. Between arms every trace was removed (`down -v`, the generated overlay,
 the project's volumes), so neither arm inherited the other's state.
 
 Each `up` was bounded at 120 seconds by a real kill, and timeouts were counted
-rather than dropped, so the bound is auditable: on the current build no project in arm A and 1 in arm B hit it. A project that needs longer than two minutes to pull and start is recorded
+rather than dropped, so the bound is auditable: on v0.47.0, 2 projects in arm A and 7 in arm B hit it (5 of the 70 on the second run); on v0.16.0, 4 and 3. The 7 are arr-suite, atlassian-jira-confluence, cs2-dedicated-server, gramps, immich, jetbrains-youtrack and ollama-ui; two of them timed out on the older build too; of the rest, some were stopped by something else first (a host port, an external network) and used the 120 seconds in a later step, and arr-suite and cs2-dedicated-server started on the older build but did not work. A project that needs longer than two minutes to pull and start is recorded
 as a timeout, not as a failure of compatibility.
 
 ## What moved, and why
 
-14 projects went from not running completely to running completely with the flag (66 against 52); none went the other way. The fixes opossum writes into `compose.opossum.yaml`
+36 projects went from not running completely to running completely with the flag (86 against 50); none went the other way — every one of the 50 that ran as written still ran with the flag. The fixes opossum writes into `compose.opossum.yaml`
 are:
 
 | Fix | Projects reached (30 July run) |
@@ -72,21 +74,23 @@ are:
 
 ## What is still in the way
 
-The remaining failures are not one problem. Arm B, by kind (90 projects; the first matching diagnostic of each project's last output decides the row, so this is a sort, not a hand-checked classification):
+The remaining failures are not one problem. Arm B on the first run, by kind (70 projects; the first failure each project's output shows decides the row, so this is a sort, not a hand-checked classification). Where a second run then finished some of a row, the last column says how many:
 
 | Outcome | Projects | What it is |
 |---|---|---|
-| Ran completely | 66 | — |
-| The image could not be pulled | 17 | A registry refused the credential exchange or answered 401/404. The same on the older build: the runtime and the upstream |
-| The image has no arm64 build | 17 | Run under Rosetta with `platform: linux/amd64` |
-| A bind mount's host directory could not be created | 12 | A path meant to be edited first (`/var/log/…`, `/path/to/…`) |
-| A published host port was already taken | 9 | Something else on the Mac holds it |
+| Ran completely | 86 | — |
+| A bind mount's host path could not be created, or its file is missing | 12 | A path meant to be edited first (`/var/log/…`, `/path/to/…`). A second run finished 1 of them. |
 | Mounts the Docker socket | 9 | nothing here answers on that path about these containers; where the path is a symlink to a socket `opossum` refuses before starting anything |
-| A network declared `external: true` doesn't exist | 5 | Create it first, or drop the declaration |
-| Started, then every or some services exited | 4 + 1 | The image's own prerequisites are unmet — secrets, config files |
-| A data directory is owned by another user, even as a named volume | 4 + 4 | Some services ran, some didn't (4); none ran (4) |
-| A bind-mounted file is missing or could not be resolved | 2 + 2 + 1 | One of the last is a timeout |
-| Other single cases | 3 | n8n, webhook.site; a label the runtime refused (fixed after the run) |
+| A data directory cannot be chowned | 9 | The image takes ownership of a bind-mounted directory at startup; a named volume lets it. A second run finished 5 of them. |
+| A published host port was already taken | 8 | Something else on the Mac holds it |
+| Started, then stopped (none of the others) | 8 | The image's own prerequisites are unmet — secrets, config files — or it exits without a command. A second run finished 1 of them. |
+| Timed out at 120s, no diagnostic | 7 | See above |
+| The image has no arm64 build and does not run under `platform: linux/amd64` either | 6 | The image's amd64 build fails under Rosetta |
+| The image could not be pulled | 4 | A registry answered 401/404 or refused the credential exchange |
+| A network or volume declared `external: true` doesn't exist | 3 | Create it first, or drop the declaration |
+| A service it depends on did not start | 2 | The failure is the dependency's. A second run finished 1 of them. |
+| A named volume shared by several services | 1 | Apple `container` 1.5.0 attaches a named volume to one container at a time |
+| Other | 1 | A single case |
 
 Every one of these is reported with a diagnostic code and a suggested fix rather
 than a raw runtime error — that is the part of compatibility that a table of
@@ -94,7 +98,7 @@ supported fields doesn't capture.
 
 A project can look healthy for a moment and not stay so: `up` on the older build returned success and a `ps` taken seconds later showed the services running, though the container
 had already exited or was about to. The current build catches "exited right after starting" itself (`OPSM-407`) and returns an error, so the same project is counted as not running
-completely. Five projects (filebrowser, cloudflare-ddns, kiwix, webtrees, wordpress) differed between the builds only that way; their state twenty seconds after `up` was the same.
+completely. Five projects looked worse on v0.47.0 than on v0.16.0 this way, every flag of the older build's run working and one of the current build's not (casdoor, filebrowser, kiwix, privatebin and webtrees); six projects were run again alone, once each, and none was a real regression — the older build's service also stopped within ten seconds. So the 66 of the older build includes some that were only running briefly, and the comparison of `--from-docker-compose` (66 against 86) is, if anything, kind to the older build.
 
 ## Re-measuring
 

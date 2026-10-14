@@ -6,6 +6,12 @@ All notable changes to opossum are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-10-14
+
+### Fixed
+
+- `up` no longer hangs on a service whose image starts its own server from an `ENTRYPOINT` that ignores its arguments (a php-fpm and nginx image, for one) when a named volume is mounted into it. The short-lived container that fills or checks a new volume now runs the shell as its entrypoint instead of passing the script as arguments to the image's own, so it ends when the script does, rather than starting the image's service as root and never returning.
+
 ## [0.47.0] - 2026-10-14
 
 ### Changed
@@ -2915,7 +2921,8 @@ First tagged release. Everything opossum can do so far.
 - `restart` reassigns a container's IP (the runtime does this on `start`); the
   name and config are preserved, so name-based discovery is unaffected.
 
-[Unreleased]: https://github.com/suruseas/opossum/compare/v0.47.0...HEAD
+[Unreleased]: https://github.com/suruseas/opossum/compare/v0.47.1...HEAD
+[0.47.1]: https://github.com/suruseas/opossum/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/suruseas/opossum/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/suruseas/opossum/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/suruseas/opossum/compare/v0.44.0...v0.45.0

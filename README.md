@@ -17,8 +17,8 @@ name. Requires macOS 26 or later and [Apple's
 `container`](https://github.com/apple/container).
 
 <!-- compat-figures -->
-Measured on 156 real-world compose projects: 52 (33%) ran completely as written,
-66 (42%) with `--from-docker-compose`, and 0 were made worse — see [measured
+Measured on 156 real-world compose projects: 50 (32%) ran completely as written,
+86 (55%) with `--from-docker-compose`, and 0 were made worse — see [measured
 compatibility](docs/compatibility.md) for the method and the breakdown of what is
 still in the way.
 <!-- /compat-figures -->
@@ -43,7 +43,7 @@ Three things, with the measurement behind each.
 
 **1. Real compose files, measured.** 156 self-hosting projects from
 [Compose-Examples](https://github.com/Haxxnet/Compose-Examples), run unmodified:
-52 (33%) came up completely as written, 66 (42%) with `--from-docker-compose`, and
+50 (32%) came up completely as written, 86 (55%) with `--from-docker-compose`, and
 0 were made worse. Each failure opossum can diagnose is reported with a diagnostic
 code and a suggested fix rather than a raw runtime error.
 [Method, corpus and the full breakdown →](docs/compatibility.md)
@@ -52,7 +52,7 @@ code and a suggested fix rather than a raw runtime error.
 writes a `compose.opossum.yaml` beside your file with the adjustments Apple
 `container` needs — a database data directory that has to be a named volume,
 Postgres's `PGDATA` moved into a subdirectory — and starts the project with them
-merged. Your compose file is never modified. That is where the 33% → 42% comes
+merged. Your compose file is never modified. That is where the 32% → 55% comes
 from, and nothing else does it.
 
 **3. Nothing runs when nothing is running.** Docker Desktop keeps one always-on

@@ -682,8 +682,8 @@ func TestSeedVolumeArgv(t *testing.T) {
 		t.Fatal("SeedVolume issued no command")
 	}
 	line := lines[len(lines)-1]
-	if !strings.HasPrefix(line, "run --rm --user 0 -v demo_data:") || !strings.Contains(line, "img:1 sh -c") {
-		t.Errorf("SeedVolume argv = %q, want a `run --rm --user 0 -v demo_data:… img:1 sh -c …`", line)
+	if !strings.HasPrefix(line, "run --rm --user 0 --entrypoint sh -v demo_data:") || !strings.Contains(line, "img:1 -c") {
+		t.Errorf("SeedVolume argv = %q, want a `run --rm --user 0 --entrypoint sh -v demo_data:… img:1 -c …`", line)
 	}
 	// Named, so an interrupted seed can be stopped and removed by name (--rm does
 	// nothing for a run killed from outside).
@@ -757,14 +757,15 @@ func TestWhatSeedVolumeHandsTheShellDoesNotRunThePath(t *testing.T) {
 	}
 }
 
-// scriptOf is the `sh -c` argument out of a logged argv line. The script is the
-// last argument, so everything after the flag is it, spaces and all.
+// scriptOf is the `-c` argument (to the `sh` entrypoint) out of a logged argv
+// line. The script is the last argument, so everything after the flag is it,
+// spaces and all.
 func scriptOf(t *testing.T, line string) string {
 	t.Helper()
-	const sep = " sh -c "
+	const sep = " -c "
 	i := strings.Index(line, sep)
 	if i < 0 {
-		t.Fatalf("no `sh -c` in the logged command: %q", line)
+		t.Fatalf("no `-c` in the logged command: %q", line)
 	}
 	return line[i+len(sep):]
 }
@@ -811,6 +812,35 @@ func TestVolumeEntriesMountsTheVolumeReadOnly(t *testing.T) {
 	}
 	if !strings.Contains(line, "--user 0") {
 		t.Errorf("the look must run as root or it cannot read a 0:0 volume, got: %q", line)
+	}
+}
+
+// The seed, the prepare and the look all run a script in an image opossum did not
+// write. The shell has to be the entrypoint: left as arguments, an image whose
+// ENTRYPOINT does not run them starts its own service as root and the run never
+// ends (a php-fpm and nginx image measured so on container 1.5.0).
+func TestTheThrowawayRunsItsScriptAsTheEntrypoint(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		do   func(rt *Runtime)
+	}{
+		{"seed", func(rt *Runtime) { rt.SeedVolume("demo_data", "img:1", "/src") }},
+		{"prepare", func(rt *Runtime) { _ = rt.PrepareVolume("demo_data", "img:1") }},
+		{"look", func(rt *Runtime) { _, _ = rt.VolumeEntries("demo_data", "img:1") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, read := loggingShim(t)
+			tc.do(rt)
+			lines := read()
+			line := lines[len(lines)-1]
+			if !strings.Contains(line, " --entrypoint sh ") {
+				t.Errorf("the shell must be set as the entrypoint, got: %q", line)
+			}
+			i, j := strings.Index(line, " --entrypoint sh "), strings.Index(line, " img:1 -c ")
+			if i < 0 || j < 0 || i > j {
+				t.Errorf("the entrypoint comes before the image, and the image is followed by -c <script>, got: %q", line)
+			}
+		})
 	}
 }
 

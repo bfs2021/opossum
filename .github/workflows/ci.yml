@@ -207,6 +207,18 @@ jobs:
       # user's home, and the suites refuse a state directory under the home
       # (they must never write to the real one). Made just before the gate
       # and removed after it, whatever the gate said.
+      # While the job runs, the host's load is written to a file every 15 s,
+      # and the last step but one prints it. A job on these runners
+      # sometimes takes about four times as long as the same job another day
+      # (`go vet` 8 s against 21-31 s), and what else was running on the
+      # machine at the time left no trace. The sampler is a background shell
+      # the runner removes with the job's other processes; it reads `uptime`
+      # and the five busiest processes, so it costs next to nothing.
+      - name: the host's load is sampled while the job runs
+        run: |
+          log="/tmp/opossum-ci-load-${{ github.run_id }}-${{ github.job }}.log"
+          : > "$log"
+          nohup sh -c 'while :; do date -u +%T; uptime; ps -eo pcpu,pmem,etime,comm --sort=-pcpu 2>/dev/null | head -6; echo; sleep 15; done' >> "$log" 2>&1 &
       - name: a temporary directory of this job's own
         run: mkdir -p "/tmp/opossum-ci-${{ github.run_id }}-${{ github.job }}"
       # Which gate: the whole one where the workshop is, the product's
@@ -224,6 +236,12 @@ jobs:
       - name: the temporary directory is removed
         if: ${{ always() }}
         run: rm -rf "/tmp/opossum-ci-${{ github.run_id }}-${{ github.job }}"
+      - name: the host's load while the job ran
+        if: ${{ always() }}
+        run: |
+          log="/tmp/opossum-ci-load-${{ github.run_id }}-${{ github.job }}.log"
+          cat "$log" 2>/dev/null || true
+          rm -f "$log"
 
       # ---- a user-facing change carries a changelog fragment -------------
       #
@@ -624,6 +642,18 @@ jobs:
         run: go vet ./...
       - name: build (stable)
         run: go build ./...
+      # While the job runs, the host's load is written to a file every 15 s,
+      # and the last step but one prints it. A job on these runners
+      # sometimes takes about four times as long as the same job another day
+      # (`go vet` 8 s against 21-31 s), and what else was running on the
+      # machine at the time left no trace. The sampler is a background shell
+      # the runner removes with the job's other processes; it reads `uptime`
+      # and the five busiest processes, so it costs next to nothing.
+      - name: the host's load is sampled while the job runs
+        run: |
+          log="/tmp/opossum-ci-load-${{ github.run_id }}-${{ github.job }}.log"
+          : > "$log"
+          nohup sh -c 'while :; do date -u +%T; uptime; ps -eo pcpu,pmem,etime,comm --sort=-pcpu 2>/dev/null | head -6; echo; sleep 15; done' >> "$log" 2>&1 &
       - name: a temporary directory of this job's own
         run: mkdir -p "/tmp/opossum-ci-${{ github.run_id }}-${{ github.job }}"
       - name: test (stable, the same gate as `make test`)
@@ -633,6 +663,12 @@ jobs:
       - name: the temporary directory is removed
         if: ${{ always() }}
         run: rm -rf "/tmp/opossum-ci-${{ github.run_id }}-${{ github.job }}"
+      - name: the host's load while the job ran
+        if: ${{ always() }}
+        run: |
+          log="/tmp/opossum-ci-load-${{ github.run_id }}-${{ github.job }}.log"
+          cat "$log" 2>/dev/null || true
+          rm -f "$log"
       # The last step of the job, whatever the steps before it said: the
       # runners keep GOCACHE on their own disk between jobs and nothing else
       # removes it, so when the cache is larger than the limit this deletes

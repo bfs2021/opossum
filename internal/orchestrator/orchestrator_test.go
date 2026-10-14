@@ -1682,10 +1682,10 @@ func TestUpSeedsFreshVolumesFromImage(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 	lines := log()
-	if indexOf(lines, "run --rm --user 0 -v demo_data:/__opossum_seed__ --name seed-demo_data.opossum web:latest") < 0 {
+	if indexOf(lines, "run --rm --user 0 --entrypoint sh -v demo_data:/__opossum_seed__ --name seed-demo_data.opossum web:latest") < 0 {
 		t.Errorf("named volume should be seeded from the image, got %v", lines)
 	}
-	if indexOf(lines, "run --rm --user 0 -v demo_web_app_node_modules_") < 0 || indexOf(lines, ":/__opossum_seed__ --name seed-demo_web_app_node_modules_") < 0 {
+	if indexOf(lines, "run --rm --user 0 --entrypoint sh -v demo_web_app_node_modules_") < 0 || indexOf(lines, ":/__opossum_seed__ --name seed-demo_web_app_node_modules_") < 0 {
 		t.Errorf("anonymous volume should be seeded from the image, got %v", lines)
 	}
 	// The bind mount's host path is never seeded.

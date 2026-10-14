@@ -1,13 +1,15 @@
 | Outcome | Projects | What it is |
 |---|---|---|
-| Ran completely | 66 | — |
-| The image could not be pulled | 17 | A registry refused the credential exchange or answered 401/404. The same on the older build: the runtime and the upstream |
-| The image has no arm64 build | 17 | Run under Rosetta with `platform: linux/amd64` |
-| A bind mount's host directory could not be created | 12 | A path meant to be edited first (`/var/log/…`, `/path/to/…`) |
-| A published host port was already taken | 9 | Something else on the Mac holds it |
+| Ran completely | 86 | — |
+| A bind mount's host path could not be created, or its file is missing | 12 | A path meant to be edited first (`/var/log/…`, `/path/to/…`). A second run finished 1 of them. |
 | Mounts the Docker socket | 9 | nothing here answers on that path about these containers; where the path is a symlink to a socket `opossum` refuses before starting anything |
-| A network declared `external: true` doesn't exist | 5 | Create it first, or drop the declaration |
-| Started, then every or some services exited | 4 + 1 | The image's own prerequisites are unmet — secrets, config files |
-| A data directory is owned by another user, even as a named volume | 4 + 4 | Some services ran, some didn't (4); none ran (4) |
-| A bind-mounted file is missing or could not be resolved | 2 + 2 + 1 | One of the last is a timeout |
-| Other single cases | 3 | n8n, webhook.site; a label the runtime refused (fixed after the run) |
+| A data directory cannot be chowned | 9 | The image takes ownership of a bind-mounted directory at startup; a named volume lets it. A second run finished 5 of them. |
+| A published host port was already taken | 8 | Something else on the Mac holds it |
+| Started, then stopped (none of the others) | 8 | The image's own prerequisites are unmet — secrets, config files — or it exits without a command. A second run finished 1 of them. |
+| Timed out at 120s, no diagnostic | 7 | See above |
+| The image has no arm64 build and does not run under `platform: linux/amd64` either | 6 | The image's amd64 build fails under Rosetta |
+| The image could not be pulled | 4 | A registry answered 401/404 or refused the credential exchange |
+| A network or volume declared `external: true` doesn't exist | 3 | Create it first, or drop the declaration |
+| A service it depends on did not start | 2 | The failure is the dependency's. A second run finished 1 of them. |
+| A named volume shared by several services | 1 | Apple `container` 1.5.0 attaches a named volume to one container at a time |
+| Other | 1 | A single case |

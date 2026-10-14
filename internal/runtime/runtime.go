@@ -1075,7 +1075,11 @@ func (r *Runtime) runOnNewVolume(volume, image, script string) error {
 	// A seed container of this name that an earlier run left behind — killed in
 	// a way the take-back never saw — would refuse this one's name; clear it.
 	r.Delete(SeedContainerName(volume))
-	out, err := r.capture("run", "--rm", "--user", "0", "-v", volume+":"+seedMountPoint, "--name", SeedContainerName(volume), image, "sh", "-c", script)
+	// The shell is the entrypoint, not an argument to it: an image whose own
+	// ENTRYPOINT does not run its arguments (a php-fpm and nginx image that starts
+	// its services from an init script) would take `sh -c <script>` as words to
+	// ignore, start the service as root, and never end.
+	out, err := r.capture("run", "--rm", "--user", "0", "--entrypoint", "sh", "-v", volume+":"+seedMountPoint, "--name", SeedContainerName(volume), image, "-c", script)
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, lastNonEmptyLine(out))
 	}
@@ -1106,7 +1110,7 @@ func (r *Runtime) VolumeEntries(volume, image string) ([]string, error) {
 	// plan is a list of what a real `up` would change. Listing it would put a
 	// command in the plan that changes nothing, and skipping it would leave a
 	// dry-run unable to say the one thing it is for.
-	out, errOut, err := r.captureSplitQuery("run", "--rm", "--user", "0", "-v", volume+":"+at+":ro", image, "sh", "-c", lookScript(at))
+	out, errOut, err := r.captureSplitQuery("run", "--rm", "--user", "0", "--entrypoint", "sh", "-v", volume+":"+at+":ro", image, "-c", lookScript(at))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", err, lastNonEmptyLine(errOut))
 	}
