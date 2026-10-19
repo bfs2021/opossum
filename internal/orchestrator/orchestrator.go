@@ -2459,12 +2459,73 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 		// When up was interrupted, the shared context is already cancelled — reset
 		// the runtime to a live context so the teardown commands themselves aren't
 		// killed. (A second Ctrl-C still force-exits from the signal handler.)
+		wasInterrupted := o.interrupted() != nil
 		o.rt.Ctx = context.Background()
+		// A service that had a container here before this call, asks to be kept
+		// alive (`restart:`), and is running again now was brought back by this call
+		// the way docker compose brings it back, and docker compose leaves it so
+		// when a later service fails (measured on v5.5.1). Tearing it down would
+		// end with it absent and its supervision lost, for something a failure
+		// elsewhere had no part in. It is not this call's to remove; what is new
+		// here, or has no `restart:`, is rolled back as before.
+		//
+		// Only where something will keep it up: not an interrupted one (a Ctrl-C
+		// asks for everything this call started to come down, and a foreground `up`
+		// starts no supervisor to keep it up afterwards), and not a dry run (which
+		// changes nothing, and must not clear a mark either). A service that is not
+		// running again by now — a foreground run that ended, a run-to-completion
+		// service — is not kept by the check below. Its dependencies come with it:
+		// one this call created and is rolling back would leave it running on
+		// nothing, so it goes too. In dependency order, so a dependency's answer is
+		// known when its dependents are asked.
+		kept := map[string]bool{}
+		for _, name := range order {
+			if wasInterrupted || o.up.dryRun || !createdSvc[name] || !existedBefore[name] {
+				continue
+			}
+			svc := o.Project.Services[name]
+			if pol, perr := svc.RestartPolicy(); perr != nil || !pol.Wants() {
+				continue
+			}
+			rolledBackDep := false
+			for _, dep := range svc.DependsOn.Names() {
+				// A run-to-completion dependency (a migration) is finished before
+				// its dependents start and is gone from nothing it left running:
+				// taking it down loses its dependent nothing.
+				if createdSvc[dep] && !kept[dep] && !oneShot[dep] {
+					rolledBackDep = true
+				}
+			}
+			if rolledBackDep {
+				continue
+			}
+			if info := o.rt.Inspect(o.containerName(name)); info.Exists && info.State == "running" {
+				kept[name] = true
+				// A successful `up` clears the mark `opossum stop` left, because
+				// bringing a service back is the opposite of leaving it stopped;
+				// the supervisor leaves a marked service alone, so without this it
+				// would be running and never kept up.
+				o.ClearStopped(name)
+			}
+		}
+		keptNets := map[string]bool{}
+		for name := range kept {
+			for _, rn := range o.networksFor(o.Project.Services[name]) {
+				keptNets[rn.name] = true
+			}
+		}
 		for i := len(started) - 1; i >= 0; i-- {
+			if name, ok := o.serviceOfContainer(order, started[i]); ok && kept[name] {
+				continue
+			}
 			o.rt.Stop(started[i])
 			o.rt.Delete(started[i])
 		}
 		for _, n := range createdNets {
+			// A network a service left running is on stays.
+			if keptNets[n] {
+				continue
+			}
 			o.rt.DeleteNetwork(n)
 		}
 		// Say so. The output above read "Starting cache" and then the failure,
@@ -2476,7 +2537,7 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 		if len(started) > 0 && !o.up.dryRun {
 			var gone, left, unknown []string
 			for _, name := range order {
-				if !createdSvc[name] {
+				if !createdSvc[name] || kept[name] {
 					continue
 				}
 				switch info := o.rt.Inspect(o.containerName(name)); {
@@ -2510,12 +2571,34 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 			if errors.As(err, &sf) && slices.Contains(gone, sf.service) {
 				sf.noContainer = true
 			}
+			var keptNames []string
+			for _, name := range order {
+				if kept[name] {
+					keptNames = append(keptNames, name)
+				}
+			}
+			keptSentence := ""
+			if len(keptNames) == 1 {
+				keptSentence = keptNames[0] + " is left running — it was there before, and `restart:` keeps it up"
+			} else if len(keptNames) > 1 {
+				keptSentence = strings.Join(keptNames, ", ") + " are left running — they were there before, and `restart:` keeps them up"
+			}
 			if len(parts) > 0 {
 				if len(left) == 0 && len(unknown) == 0 {
-					parts[0] += "; nothing this `up` started is left running"
+					if keptSentence == "" {
+						parts[0] += "; nothing this `up` started is left running"
+					} else {
+						parts[0] += "; " + keptSentence
+					}
+				} else if keptSentence != "" {
+					// The rest was not all taken down, but what was left on purpose is
+					// still told apart from what was left by accident.
+					parts = append(parts, keptSentence)
 				}
 				line := strings.Join(parts, "; ")
 				o.logf("%s\n", strings.ToUpper(line[:1])+line[1:])
+			} else if keptSentence != "" {
+				o.logf("%s\n", keptSentence)
 			} else {
 				// Every attempt this call made came to nothing, so there was nothing to
 				// tear down and nothing to name — and the reader still wants to know
@@ -2541,7 +2624,7 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 		// this list.
 		var survivors []string
 		for _, name := range order {
-			if createdSvc[name] {
+			if createdSvc[name] && !kept[name] {
 				continue
 			}
 			info := o.rt.Inspect(o.containerName(name))
@@ -5948,6 +6031,33 @@ func (e *imageFetchError) Error() string {
 
 func (e *imageFetchError) Unwrap() error { return e.err }
 
+// platformIsNativeArm is whether a service's `platform:` is this Mac's own
+// architecture or says nothing: empty, or arm64 in any of its spellings
+// (`arm64`, `linux/arm64`, `linux/arm64/v8`, `aarch64`), case aside. Anything
+// else asks for another architecture, which is not this failure's to explain.
+func platformIsNativeArm(platform string) bool {
+	p := strings.ToLower(strings.TrimSpace(platform))
+	if p == "" {
+		return true
+	}
+	p = strings.TrimPrefix(p, "linux/")
+	arch, _, _ := strings.Cut(p, "/")
+	return arch == "arm64" || arch == "aarch64"
+}
+
+// execFormatError is the runtime's report of the kernel refusing to run a
+// program: the failed exec and its errno, together on one line as the runtime
+// writes them (so one word in each of two lines of a container's own output is
+// not it).
+func execFormatError(stderr string) bool {
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(line, "failed to exec [") && strings.Contains(line, "Exec format error") {
+			return true
+		}
+	}
+	return false
+}
+
 // runErrorHint decodes a failed `container run` (its captured stderr) into an
 // actionable hint for a known Apple-`container` gotcha the pre-flight can't catch:
 // a host-port conflict the host probe can't see (a privileged port held by the
@@ -6018,6 +6128,30 @@ func runErrorHint(svc *compose.Service, holder string, takesItBack bool, err err
 		}
 		return "\n  → [" + string(codeImageNoArm64) + "] this image has no build for Apple silicon (arm64). " +
 			"Add `platform: linux/amd64` to the service — opossum runs an amd64 image through Rosetta."
+	// The kernel refused to run what the service starts: `Exec format error`
+	// (ENOEXEC). Two things do that — a program built for another architecture
+	// than the image's (an amd64 binary in an arm64 image, which docker runs
+	// under emulation without a word) and a script with no `#!` line (which
+	// docker fails on as well). Measured on 1.5.0: both words in one line, and no
+	// container left behind (testdata/error-wordings/exec-format-error-150.txt).
+	//
+	// Said only to a service that has not asked for a platform, or asked for
+	// arm64: one that asks for amd64 is on Rosetta already, so this is another
+	// failure, and one that asks for something else (386, arm/v7) is not what
+	// `--rosetta` is for. Nothing measured says what to tell either.
+	case execFormatError(s):
+		if svc != nil && !platformIsNativeArm(svc.Platform) {
+			return ""
+		}
+		hint := "\n  → [" + string(codeProgramWrongArch) + "] the kernel could not run what this service starts (`Exec format error`): " +
+			"either a program built for another CPU architecture than this Mac's (most often x86-64 inside an arm64 image, " +
+			"which docker runs under emulation), or a script with no `#!` line (which docker cannot run either). " +
+			"For an x86-64 program, `container run --rosetta` runs it, and opossum has no setting for that on a service yet. "
+		if svc != nil && svc.Build != nil {
+			return hint + "Build the program for arm64 (the Dockerfile's target architecture, e.g. `GOARCH`)."
+		}
+		return hint + "`platform: linux/amd64` does not help when the image has no amd64 build. " +
+			"Look for a native (arm64) tag of the image, or build the program for arm64."
 	// The receiver for a conflict the pre-flight missed, and there is one it does
 	// miss. checkHostPorts asks one question — is this address busy on the host
 	// right now — and asks it before anything starts. At the time it runs the
@@ -9131,6 +9265,16 @@ func (o *Orchestrator) ensureBindDirs(service string, vols []string, redo string
 // Run-to-completion services can appear — the supervisor filters them out itself,
 // since they are meant to exit.
 func (o *Orchestrator) Started() []string { return o.started }
+
+// serviceOfContainer is the service in order whose container is cname.
+func (o *Orchestrator) serviceOfContainer(order []string, cname string) (string, bool) {
+	for _, name := range order {
+		if o.containerName(name) == cname {
+			return name, true
+		}
+	}
+	return "", false
+}
 
 // networkCreateAdvice is the line that follows a failed `network create`. The runtime's own refusal of a label key
 // (`invalid_label_key_content`: for example a key that starts with `-`, is empty, has an upper-case letter, a `_`, a space or a

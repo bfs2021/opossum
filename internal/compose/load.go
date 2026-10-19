@@ -4104,6 +4104,14 @@ func loadUnitRaw(path string, raw []byte, projectDir string, scope envScope, ear
 			if len(e.paths) == 0 {
 				continue
 			}
+			// An `oci://` include is a compose file kept in a registry, which docker
+			// compose fetches and this does not: read as a path it comes out as a
+			// file that is not there, and the reader goes looking for it.
+			for _, p := range e.paths {
+				if strings.HasPrefix(p, "oci://") {
+					return nil, nil, nil, fmt.Errorf("compose file %s: include %s names a compose file kept in an OCI registry, which opossum does not fetch (docker compose does) — include a local copy of that compose file by path instead, or remove the include", path, p)
+				}
+			}
 			subDir := e.projectDir
 			if subDir == "" {
 				subDir = filepath.Dir(e.paths[0])

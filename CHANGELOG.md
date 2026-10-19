@@ -6,6 +6,20 @@ All notable changes to opossum are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-10-20
+
+### Added
+
+- When a service fails to start with `Exec format error`, `up` now says what that means instead of leaving only the runtime's nested error text (`[OPSM-416]`). The kernel refuses either a program built for another CPU architecture than the image's (an x86-64 binary in an arm64 image, which docker runs under emulation without a word) or a script with no `#!` line (which docker fails on too). The message names both, and says that `container run --rosetta` runs an x86-64 program, which opossum cannot yet set for a single service. For a service that builds it points at the build's target architecture; otherwise at a native (arm64) tag, since `platform: linux/amd64` does not help when the image has no amd64 build. A service that asks for a platform other than arm64 gets no new message.
+
+### Changed
+
+- A compose file whose `include:` names an `oci://` reference (a compose file kept in an OCI registry, as in Docker's `labspace-*` projects) is now refused for what it is: `opossum` says the include names a compose file in an OCI registry, which it does not fetch (docker compose does), and to include a local copy by path or remove the include. It used to read `oci://org/name` as a relative path and report a file that is not there (`…/oci:/org/name: no such file or directory`), so the reader went looking for a file that never existed. Fetching such an include is not supported.
+
+### Fixed
+
+- A failed `up` no longer removes a `restart:` service it brought back. When a service with `restart:` had a container before the call and had stopped, `up` replaces it, and if a later service then failed (a dependency that never turned healthy, say) the rollback removed the replacement too, leaving the service absent and out of the supervisor's set. docker compose starts it and leaves it running; so does `up` now, and the report names it (`cache is left running — it was there before, and restart: keeps it up`). Services that are new in the call, have no `restart:`, or depend on something the call rolled back are rolled back as before, and so is everything when `up` is interrupted with Ctrl-C; a network a kept service is on stays, and the mark `opossum stop` left on it is cleared, as a successful `up` does.
+
 ## [0.47.1] - 2026-10-14
 
 ### Fixed
@@ -2921,7 +2935,8 @@ First tagged release. Everything opossum can do so far.
 - `restart` reassigns a container's IP (the runtime does this on `start`); the
   name and config are preserved, so name-based discovery is unaffected.
 
-[Unreleased]: https://github.com/suruseas/opossum/compare/v0.47.1...HEAD
+[Unreleased]: https://github.com/suruseas/opossum/compare/v0.48.0...HEAD
+[0.48.0]: https://github.com/suruseas/opossum/compare/v0.47.1...v0.48.0
 [0.47.1]: https://github.com/suruseas/opossum/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/suruseas/opossum/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/suruseas/opossum/compare/v0.45.0...v0.46.0

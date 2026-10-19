@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1496,4 +1497,237 @@ func indexOf(names []string, want string) int {
 		}
 	}
 	return -1
+}
+
+// The order `up` starts services in is the order a name-ordered walk of the
+// file gives, placing what a service waits on just before it: the order a
+// project written for 0.47.1 was started in. A service that looks another up
+// by name at start (bff, for api, which waits on db) found it there; one that
+// looks a later-named independent service up (web1 for redis, with nginx
+// waiting on web1 and web2) does not, as there — docker compose starts both
+// at once, and starting one at a time cannot suit every file.
+func TestStartupOrderIsANameOrderedWalkThatPlacesDependenciesJustBeforeTheirDependent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		file string
+		want []string
+	}{
+		{"a service that looks a dependent one up (bff, api, db)", `
+services:
+  bff: {image: x}
+  api: {image: x, depends_on: [db]}
+  db: {image: x}
+  redis: {image: x}
+  web: {image: x}
+`, []string{"db", "api", "bff", "redis", "web"}},
+		{"the same with the looker named after db (zweb)", `
+services:
+  zweb: {image: x}
+  api: {image: x, depends_on: [db]}
+  db: {image: x}
+  redis: {image: x}
+  web: {image: x}
+`, []string{"db", "api", "redis", "web", "zweb"}},
+		{"a dependent named first pulls its dependencies ahead of a later-named independent one", `
+services:
+  redis: {image: x}
+  web1: {image: x}
+  web2: {image: x}
+  nginx: {image: x, depends_on: [web1, web2]}
+`, []string{"web1", "web2", "nginx", "redis"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := Load(writeTemp(t, tc.file))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			got, err := p.StartupOrder()
+			if err != nil {
+				t.Fatalf("StartupOrder: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A service that waits on a cycle without being in it is placed after what it
+// waits on, and a cycle's own edge is the one left out: a depends on b, and b
+// and c depend on each other. `down`, which stops in the reverse, stops a
+// first.
+func TestStartupOrderTolerantDoesNotPlaceADependentOfACycleBeforeIt(t *testing.T) {
+	p, err := Load(writeTemp(t, `
+services:
+  a: {image: x, depends_on: [b]}
+  b: {image: x, depends_on: [c]}
+  c: {image: x, depends_on: [b]}
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got, err := p.StartupOrderTolerant(nil)
+	if err != nil {
+		t.Fatalf("StartupOrderTolerant: %v", err)
+	}
+	if want := []string{"c", "b", "a"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// Only the edge that comes back to a service already being walked is left
+// out, not the others a service waits on: a waits on b, which waits back on
+// a, and on y, which is in a cycle of its own with z.
+func TestStartupOrderTolerantKeepsTheOtherDependenciesOfAServiceOnACycle(t *testing.T) {
+	p, err := Load(writeTemp(t, `
+services:
+  a: {image: x, depends_on: [b, y]}
+  b: {image: x, depends_on: [a]}
+  y: {image: x, depends_on: [z]}
+  z: {image: x, depends_on: [y]}
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got, err := p.StartupOrderTolerant(nil)
+	if err != nil {
+		t.Fatalf("StartupOrderTolerant: %v", err)
+	}
+	if want := []string{"b", "z", "y", "a"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// A service that names a dependency the file does not define is placed by its
+// name, not left waiting for it: a gated service is read through a partial
+// read that does not refuse it.
+func TestStartupOrderPlacesAServiceWithAnUndefinedDependencyByName(t *testing.T) {
+	p := &Project{Services: map[string]*Service{
+		"keep": {Image: "x"},
+		"a":    {Image: "x", Profiles: []string{"g"}, DependsOn: DependsOn{{Name: "nosuch"}}},
+	}}
+	order, err := p.StartupOrderReading([]string{"keep"})
+	if err != nil {
+		t.Fatalf("StartupOrderReading: %v", err)
+	}
+	if want := []string{"a", "keep"}; !reflect.DeepEqual(order, want) {
+		t.Errorf("got %v, want %v", order, want)
+	}
+}
+
+// depends_on may name a service twice; it still waits once for it, and is
+// ready as soon as it is placed, ahead of a later-named service.
+func TestStartupOrderAServiceListedTwiceInDependsOnIsStillPlacedWhenItsDependencyIs(t *testing.T) {
+	p, err := Load(writeTemp(t, `
+services:
+  a: {image: x, depends_on: [b, b]}
+  b: {image: x}
+  c: {image: x}
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got, err := p.StartupOrder()
+	if err != nil {
+		t.Fatalf("StartupOrder: %v", err)
+	}
+	if want := []string{"b", "a", "c"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// A gated service that names a service the file does not define, and sits in
+// a cycle with another gated service, is placed after the one it can: the walk
+// that finds the cycle passes over the dependency that is not there instead of
+// looking it up.
+func TestStartupOrderReadingAGatedCycleThroughAnUndefinedDependency(t *testing.T) {
+	p := &Project{Services: map[string]*Service{
+		"web": {Image: "x"},
+		"x":   {Image: "x", Profiles: []string{"p"}, DependsOn: DependsOn{{Name: "nope"}, {Name: "y"}}},
+		"y":   {Image: "x", Profiles: []string{"p"}, DependsOn: DependsOn{{Name: "x"}}},
+	}}
+	got, err := p.StartupOrderReading([]string{"web"})
+	if err != nil {
+		t.Fatalf("StartupOrderReading: %v", err)
+	}
+	if want := []string{"web", "y", "x"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// The order depends_on is written in does not change the order: [e, a] and
+// [a, e] both put f after the later of the two, and ahead of g by name.
+func TestStartupOrderIsTheSameWhicheverWayDependsOnIsListed(t *testing.T) {
+	for _, deps := range []string{"[e, a]", "[a, e]"} {
+		t.Run(deps, func(t *testing.T) {
+			p, err := Load(writeTemp(t, `
+services:
+  a: {image: x, depends_on: [b]}
+  b: {image: x, depends_on: [d]}
+  d: {image: x}
+  e: {image: x}
+  f: {image: x, depends_on: `+deps+`}
+  g: {image: x, depends_on: [d]}
+`))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			got, err := p.StartupOrder()
+			if err != nil {
+				t.Fatalf("StartupOrder: %v", err)
+			}
+			want := []string{"d", "b", "a", "e", "f", "g"}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// Ready services come by name however many there are: a becomes ready once
+// s00 is placed, and goes next, ahead of s01 and the rest.
+func TestStartupOrderKeepsNameOrderAmongManyReadyServices(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("services:\n  a: {image: x, depends_on: [s00]}\n")
+	var want []string
+	for i := 0; i < 20; i++ {
+		n := fmt.Sprintf("s%02d", i)
+		fmt.Fprintf(&b, "  %s: {image: x}\n", n)
+		want = append(want, n)
+	}
+	want = append([]string{"s00", "a"}, want[1:]...)
+	p, err := Load(writeTemp(t, b.String()))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got, err := p.StartupOrder()
+	if err != nil {
+		t.Fatalf("StartupOrder: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// Independent services read through StartupOrderTolerant come in name order,
+// the order the map holding them does not give.
+func TestStartupOrderTolerantPlacesIndependentServicesByName(t *testing.T) {
+	p, err := Load(writeTemp(t, `
+services:
+  e: {image: x, depends_on: [c]}
+  d: {image: x}
+  c: {image: x}
+  b: {image: x}
+  a: {image: x}
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got, err := p.StartupOrderTolerant(nil)
+	if err != nil {
+		t.Fatalf("StartupOrderTolerant: %v", err)
+	}
+	if want := []string{"a", "b", "c", "d", "e"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
 }

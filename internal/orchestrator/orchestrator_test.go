@@ -4705,3 +4705,30 @@ func TestTheDryRunPlanListsTheBinaryBeforeItsArguments(t *testing.T) {
 		t.Errorf("the plan should list %q, got:\n%s", want, out.String())
 	}
 }
+
+// Services are started in a name-ordered walk that places what a service
+// waits on just before it (the order 0.47.1 started them in): nginx waits on
+// web1 and web2, so they come first, and redis, which nothing waits on,
+// last.
+func TestUpStartsDependenciesJustBeforeTheirDependent(t *testing.T) {
+	rt, log := fakeShim(t)
+	p := project("demo", map[string]*compose.Service{
+		"redis": {Image: "redis"},
+		"web1":  {Image: "web"},
+		"web2":  {Image: "web"},
+		"nginx": {Image: "nginx", DependsOn: compose.DependsOn{{Name: "web1"}, {Name: "web2"}}},
+	})
+	o := orchestrator.New(p, rt, "opossum", &bytes.Buffer{})
+	if err := o.Up(true); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	lines := log()
+	prev := -1
+	for _, svc := range []string{"web1", "web2", "nginx", "redis"} {
+		i := indexOf(lines, "run -d --name "+svc+".demo.opossum")
+		if i < 0 || i < prev {
+			t.Fatalf("%s should run after the one before it in web1, web2, nginx, redis (at %d, previous at %d): %v", svc, i, prev, lines)
+		}
+		prev = i
+	}
+}

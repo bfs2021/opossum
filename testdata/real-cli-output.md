@@ -477,6 +477,7 @@ HOST FOOTPRINT が黙って `—`／上流はホストのコマンド）。
 | 10 | image の削除警告 | `runtime.go` `DeleteImage` 経由の `resourceInUse` | `in use` | `path-tried:image-in-use-not-reached-131.txt` | `unverified` |
 | 11 | `doctor` の storage 警告 | `doctor.go` `parseReclaimable` | `GB (` | `raw:doctor-inputs-131.txt` | `raw:doctor-inputs-131.txt`（`GB` と `MB` のみ。`B`/`KB`/`TB`/`PB` は unverified） |
 | 12 | `doctor` の builder 警告 | `doctor.go` `parseBuilder` | `running` `MB` | `raw:doctor-inputs-131.txt` | `raw:doctor-inputs-131.txt`（`running`・`stopped`・`MB` のみ。`GB` は unverified） |
+| 13 | OPSM-416 | `orchestrator.go` `execFormatError` | `failed to exec [` `Exec format error` | `unverified` | `raw:exec-format-error-150.txt` |
 
 **文言列とコードは、コード側の宣言で結ばれている。** 上流の文言に当てる各パッケージは
 `UpstreamWordings`（`internal/runtime/upstream.go` の型）に「どの関数が・どの文言に」を宣言し、

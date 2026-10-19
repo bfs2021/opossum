@@ -243,3 +243,77 @@ func TestAnUndecodedStartFailureCarriesNoCode(t *testing.T) {
 func freshPullLine(arch string) string {
 	return `Error: unsupported platform Platform(osVersion: nil, osFeatures: nil, variant: nil, _rawOS: "linux", _rawArch: "` + arch + `")` + "\n"
 }
+
+// The kernel refusing to run what a service starts: `Exec format error`, from a
+// program built for another architecture than the image's (docker runs it
+// emulated) or from a script with no `#!` line (docker fails on it as well).
+// The line is the runtime's own, as 1.5.0 printed it for a script with no `#!`
+// line (testdata/error-wordings/exec-format-error-150.txt; the container's name is
+// made up here); the amd64-binary-in-an-arm64-image form was reported by a probe
+// of a real project with the same words and was not built here.
+func TestRunErrorHintProgramWrongArch(t *testing.T) {
+	const real = `Error: failed to start process a.proj.opossum in container a.proj.opossum (cause: "internalError: "failed to start process (cause: "internalError: "startProcess: failed to start process: internalError: "vmexec error: internalError: "failed to exec [sleep 120] Error Domain=NSPOSIXErrorDomain Code=8 "Exec format error""""")"")`
+	for _, tc := range []struct {
+		name   string
+		svc    compose.Service
+		stderr string
+		want   bool
+	}{
+		{"the runtime's line", compose.Service{}, real, true},
+		{"after the runtime's progress lines", compose.Service{}, "[6/6] Starting container [0s]\n" + real + "\n", true},
+		{"after the foreground run's own first line", compose.Service{}, `Error: failed to exec [/t/x] Error Domain=NSPOSIXErrorDomain Code=8 "Exec format error"` + "\n" + real, true},
+		{"a service that asks for arm64", compose.Service{Platform: "linux/arm64"}, real, true},
+		{"a service that asks for arm64 in capitals", compose.Service{Platform: "LINUX/ARM64"}, real, true},
+		{"a service that asks for arm64 alone", compose.Service{Platform: "arm64"}, real, true},
+		{"a service that asks for arm64 with a variant", compose.Service{Platform: "linux/arm64/v8"}, real, true},
+		{"a service that asks for aarch64", compose.Service{Platform: "linux/aarch64"}, real, true},
+		{"a service that asks for arm64 with a space around it", compose.Service{Platform: " linux/arm64 "}, real, true},
+		{"a service that builds", compose.Service{Build: &compose.Build{Context: "."}}, real, true},
+		{"a service that builds and names its image", compose.Service{Image: "go-api:latest", Build: &compose.Build{Context: "."}}, real, true},
+		// Asked for amd64 already: on Rosetta, so a different failure and no
+		// advice measured for it. Asked for another platform: not what --rosetta is for.
+		{"a service that already asks for amd64", compose.Service{Platform: "linux/amd64"}, real, false},
+		{"a service that already asks for amd64 as x86_64", compose.Service{Platform: "linux/x86_64"}, real, false},
+		{"a service that asks for amd64 with a variant", compose.Service{Platform: "linux/amd64/v2"}, real, false},
+		{"a service that asks for riscv64", compose.Service{Platform: "linux/riscv64"}, real, false},
+		{"a service that asks for 386", compose.Service{Platform: "linux/386"}, real, false},
+		{"a service that asks for arm/v7", compose.Service{Platform: "linux/arm/v7"}, real, false},
+		// Only the runtime's exec failure, in one line: the words alone, or one in
+		// each of two lines of a container's output, are not it.
+		{"the words without the exec failure", compose.Service{}, "sh: ./app: Exec format error", false},
+		{"an exec failure for another reason", compose.Service{}, `failed to exec [sleep 120] Error Domain=NSPOSIXErrorDomain Code=2 "No such file or directory"`, false},
+		{"the two words on two lines", compose.Service{}, "app: failed to exec [worker] retrying\nworker: Exec format error\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := tc.svc
+			h := runErrorHint(&svc, "", false, runErr(tc.stderr))
+			if got := strings.Contains(h, "["+string(codeProgramWrongArch)+"]"); got != tc.want {
+				t.Fatalf("hint = %q, want the %s hint: %v", h, codeProgramWrongArch, tc.want)
+			}
+			if !tc.want {
+				if h != "" {
+					t.Errorf("nothing here is diagnosed, so nothing should be claimed, got: %q", h)
+				}
+				return
+			}
+			// Each thing the reader is told is its own check: a sentence dropped
+			// leaves the rest reading as if nothing were missing.
+			for _, part := range []string{"(`Exec format error`)", "another CPU architecture", "x86-64 inside an arm64 image", "which docker runs under emulation", "no `#!` line", "which docker cannot run either", "`container run --rosetta`", "no setting for that on a service yet"} {
+				if !strings.Contains(h, part) {
+					t.Errorf("the hint should say %q, got: %q", part, h)
+				}
+			}
+			if tc.svc.Build != nil {
+				if !strings.Contains(h, "Build the program for arm64 (the Dockerfile's target architecture") || strings.Contains(h, "native (arm64) tag") || strings.Contains(h, "does not help") {
+					t.Errorf("a service that builds is told to fix the build, not to look for a tag or to ask for a platform, got: %q", h)
+				}
+			} else {
+				for _, part := range []string{"`platform: linux/amd64` does not help", "Look for a native (arm64) tag of the image, or build the program for arm64."} {
+					if !strings.Contains(h, part) {
+						t.Errorf("the hint should say %q, got: %q", part, h)
+					}
+				}
+			}
+		})
+	}
+}

@@ -81,3 +81,7 @@ func SupervisorPidFileExistsForTest(project string) bool {
 	_, err = os.Stat(path)
 	return err == nil
 }
+
+// WasStoppedByUsForTest is whether `opossum stop` left its mark on a service: the
+// supervisor leaves a marked service alone.
+func (o *Orchestrator) WasStoppedByUsForTest(service string) bool { return o.wasStoppedByUs(service) }

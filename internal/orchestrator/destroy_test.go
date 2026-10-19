@@ -2,6 +2,7 @@ package orchestrator_test
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -207,7 +208,7 @@ func TestStartedListsWhatSurvivedARollback(t *testing.T) {
 			Image:     "web",
 			DependsOn: compose.DependsOn{{Name: "db", Condition: compose.ConditionHealthy}},
 		},
-		"zcache": {Image: "cache", Restart: "always"},
+		"cache": {Image: "cache", Restart: "always"},
 	})
 	o := orchestrator.New(p, rt, "opossum", &bytes.Buffer{})
 	// First: everything comes up, so the config hashes are recorded.
@@ -216,7 +217,7 @@ func TestStartedListsWhatSurvivedARollback(t *testing.T) {
 	}
 
 	// Second: db's healthcheck never passes, so the bring-up fails and rolls back.
-	// db and zcache are unchanged, so they are skipped — and survive.
+	// db and cache are unchanged, so they are skipped — and survive.
 	setShimEnv(rt, "HEALTH_HANG=1")
 	if err := o.Up(true); err == nil {
 		t.Fatal("the second up should fail")
@@ -225,7 +226,7 @@ func TestStartedListsWhatSurvivedARollback(t *testing.T) {
 	// answer, or the whole order, would satisfy a membership test.
 	got := append([]string(nil), o.Started()...)
 	sort.Strings(got)
-	want := []string{"db", "web", "zcache"}
+	want := []string{"cache", "db", "web"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Started() = %v, want %v — all three were left alone by the failed call (it "+
 			"never got past db's healthcheck) and are still running from the first up", got, want)
@@ -353,25 +354,30 @@ func TestStartedListsAStoppedSurvivor(t *testing.T) {
 			Image:     "web",
 			DependsOn: compose.DependsOn{{Name: "db", Condition: compose.ConditionHealthy}},
 		},
-		"zcache": {Image: "cache", Restart: "always"},
+		// After web, which is where the second up stops: a service the stop
+		// never reached. (Its name no longer puts it last; its place does.)
+		"cache": {
+			Image: "cache", Restart: "always",
+			DependsOn: compose.DependsOn{{Name: "web", Condition: compose.ConditionStarted}},
+		},
 	})
 	o := orchestrator.New(p, rt, "opossum", &bytes.Buffer{})
 	if err := o.Up(true); err != nil {
 		t.Fatalf("first up: %v", err)
 	}
-	// Between the calls zcache crashes: still there, no longer running.
-	setShimEnv(rt, "HEALTH_HANG=1", "INSPECT_STOPPED=zcache.demo.opossum")
+	// Between the calls cache crashes: still there, no longer running.
+	setShimEnv(rt, "HEALTH_HANG=1", "INSPECT_STOPPED=cache.demo.opossum")
 	if err := o.Up(true); err == nil {
 		t.Fatal("the second up should fail")
 	}
 	var saw bool
 	for _, name := range o.Started() {
-		if name == "zcache" {
+		if name == "cache" {
 			saw = true
 		}
 	}
 	if !saw {
-		t.Errorf("zcache exists but is stopped — that is what `restart:` is for, so it belongs "+
+		t.Errorf("cache exists but is stopped — that is what `restart:` is for, so it belongs "+
 			"in the set; got %v", o.Started())
 	}
 }
@@ -584,5 +590,525 @@ func TestDestroySaysBothWhatIsLeftAndWhatCouldNotBeAskedAbout(t *testing.T) {
 		"and the runtime could not be asked whether 2 container(s) are gone: container db.demo.opossum and container web.demo.opossum — `container ls -a` shows them"
 	if err == nil || err.Error() != want {
 		t.Errorf("destroy error:\n got %v\nwant %q", err, want)
+	}
+}
+
+// A failed `up` leaves alone a service that was there before, asks to be kept
+// alive (`restart:`) and is running again because this `up` brought it back —
+// as docker compose does (measured on v5.5.1: a stopped `restart: always` service
+// is started during an `up` whose db never turns healthy, and is still running
+// after). Tearing it down would leave it absent, with nothing for the supervisor
+// to keep up, over a failure it had no part in. What is new in this call, and what
+// has no `restart:`, is rolled back as before.
+//
+// cache has no depends_on and sorts ahead of db, so it is started before the health wait that
+// fails.
+func TestFailedUpKeepsARestartServiceItBroughtBack(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		restart     string
+		stopBefore  bool // it was there and had stopped before the failing up
+		stuck       bool // and is still not running after the run that replaced it
+		changeDB    bool // db's configuration changed, so this up replaces it too
+		wantKept    bool
+		wantMessage string
+	}{
+		{"there before, stopped, with restart", "always", true, false, false, true, "cache is left running"},
+		{"there before, stopped, with on-failure", "on-failure", true, false, false, true, "cache is left running"},
+		// What else this up rolled back is still said, ahead of what it left.
+		{"kept, with another service rolled back", "always", true, false, true, true, "Rolled back db"},
+		{"kept, with another service rolled back, saying what is left", "always", true, false, true, true, "cache is left running"},
+		// Each condition is its own row: dropping one must turn one red.
+		{"there before, stopped, with no restart", "", true, false, false, false, "Rolled back"},
+		{"there before, stopped, with restart: no", "no", true, false, false, false, "Rolled back"},
+		{"new in this up, with restart", "always", false, false, false, false, "Rolled back"},
+		{"there before, but not running after it was run", "always", true, true, false, false, "Rolled back"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, log := fakeShim(t)
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+			dbEnv := compose.Environment{"V=1"}
+			svcs := func() map[string]*compose.Service {
+				return map[string]*compose.Service{
+					"db": {
+						Image:       "db",
+						Environment: dbEnv,
+						Healthcheck: &compose.Healthcheck{
+							Interval: time.Millisecond,
+							Test:     []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1,
+						},
+					},
+					"web":   {Image: "web", DependsOn: compose.DependsOn{{Name: "db", Condition: compose.ConditionHealthy}}},
+					"cache": {Image: "cache", Restart: tc.restart},
+				}
+			}
+			var out bytes.Buffer
+			o := orchestrator.New(project("demo", svcs()), rt, "opossum", &out)
+			if tc.stopBefore {
+				if err := o.Up(true); err != nil {
+					t.Fatalf("first up: %v", err)
+				}
+				// Between the calls cache crashes: still there, no longer running.
+				rt.Stop("cache.demo.opossum")
+				o = orchestrator.New(project("demo", svcs()), rt, "opossum", &out)
+			}
+			out.Reset()
+			setShimEnv(rt, "HEALTH_HANG=1")
+			if tc.stuck {
+				setShimEnv(rt, "INSPECT_STOPPED=cache.demo.opossum")
+			}
+			if tc.changeDB {
+				dbEnv = compose.Environment{"V=2"}
+				o = orchestrator.New(project("demo", svcs()), rt, "opossum", &out)
+			}
+			if err := o.Up(true); err == nil {
+				t.Fatal("the up should fail")
+			}
+			var saw bool
+			for _, n := range o.Started() {
+				if n == "cache" {
+					saw = true
+				}
+			}
+			if saw != tc.wantKept {
+				t.Errorf("cache in Started() = %v, want %v; got %v", saw, tc.wantKept, o.Started())
+			}
+			if !strings.Contains(out.String(), tc.wantMessage) {
+				t.Errorf("the report should say %q, got:\n%s", tc.wantMessage, out.String())
+			}
+			// Kept means not stopped or deleted after the run that brought it back.
+			lines := log()
+			last := -1
+			for i, l := range lines {
+				if strings.HasPrefix(l, "run -d --name cache.demo.opossum") {
+					last = i
+				}
+			}
+			var tornDown bool
+			if last >= 0 {
+				for _, l := range lines[last+1:] {
+					if l == "stop cache.demo.opossum" || l == "delete --force cache.demo.opossum" {
+						tornDown = true
+					}
+				}
+			}
+			if tornDown == tc.wantKept {
+				t.Errorf("cache torn down after it was run = %v, want %v:\n%s", tornDown, !tc.wantKept, strings.Join(lines, "\n"))
+			}
+		})
+	}
+}
+
+// What a failed `up` leaves alone has to be something the supervisor will keep up.
+// The mark `opossum stop` leaves makes the supervisor leave a service alone, and a
+// successful `up` clears it; a service the failed one brought back running with the
+// mark still on would be kept and never restarted.
+func TestFailedUpClearsTheStopMarkOfAServiceItKeeps(t *testing.T) {
+	rt, _ := fakeShim(t)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+	svcs := func() map[string]*compose.Service {
+		return map[string]*compose.Service{
+			"db": {Image: "db", Healthcheck: &compose.Healthcheck{
+				Interval: time.Millisecond, Test: []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1}},
+			"web":   {Image: "web", DependsOn: compose.DependsOn{{Name: "db", Condition: compose.ConditionHealthy}}},
+			"cache": {Image: "cache", Restart: "always"},
+		}
+	}
+	o := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{})
+	if err := o.Up(true); err != nil {
+		t.Fatalf("first up: %v", err)
+	}
+	if err := o.Stop([]string{"cache"}); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if !o.WasStoppedByUsForTest("cache") {
+		t.Fatal("`stop` should leave its mark, or this test says nothing")
+	}
+	setShimEnv(rt, "HEALTH_HANG=1")
+	o = orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{})
+	if err := o.Up(true); err == nil {
+		t.Fatal("the up should fail")
+	}
+	if o.WasStoppedByUsForTest("cache") {
+		t.Error("cache was left running by the failed up with the stop mark still on: the supervisor would leave it alone")
+	}
+}
+
+// Who is left running is told by what keeps it up: not a foreground `up` or an
+// interrupted one (everything this call started is to come down; a foreground one
+// starts no supervisor), not a run-to-completion service, not a service whose
+// dependency this call is rolling back, and a network a kept service is on stays.
+func TestFailedUpDoesNotKeepWhatNothingWouldKeepUp(t *testing.T) {
+	healthyDB := func() *compose.Service {
+		return &compose.Service{Image: "db", Healthcheck: &compose.Healthcheck{
+			Interval: time.Millisecond, Test: []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1}}
+	}
+	tornDownAfterRun := func(lines []string, cname string) bool {
+		last := -1
+		for i, l := range lines {
+			if strings.HasPrefix(l, "run ") && strings.Contains(l, "--name "+cname) {
+				last = i
+			}
+		}
+		if last < 0 {
+			return false
+		}
+		for _, l := range lines[last+1:] {
+			if l == "stop "+cname || l == "delete --force "+cname {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("a Ctrl-C during a detached up", func(t *testing.T) {
+		rt, log := fakeShim(t)
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+		svcs := func() map[string]*compose.Service {
+			return map[string]*compose.Service{
+				"db":    healthyDB(),
+				"web":   {Image: "web", DependsOn: compose.DependsOn{{Name: "db", Condition: compose.ConditionHealthy}}},
+				"cache": {Image: "cache", Restart: "always"},
+			}
+		}
+		if err := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{}).Up(true); err != nil {
+			t.Fatalf("first up: %v", err)
+		}
+		rt.Stop("cache.demo.opossum")
+		setShimEnv(rt, "HEALTH_HANG=1")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		o := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{})
+		o.OnSignal(ctx)
+		done := make(chan error, 1)
+		go func() { done <- o.Up(true) }()
+		// The second run of cache: the first up's is already in the log, and
+		// cancelling before this one would interrupt an up that has done nothing.
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) && countLinePrefix(log(), "run -d --name cache.demo.opossum") < 2 {
+			time.Sleep(2 * time.Millisecond)
+		}
+		if countLinePrefix(log(), "run -d --name cache.demo.opossum") < 2 {
+			t.Fatalf("the second up never reached cache, got %v", log())
+		}
+		cancel()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("the up should be interrupted")
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the interrupted up never returned")
+		}
+		if !tornDownAfterRun(log(), "cache.demo.opossum") {
+			t.Errorf("a Ctrl-C asks for what this call started to come down; cache was left:\n%s", strings.Join(log(), "\n"))
+		}
+	})
+
+	t.Run("a foreground up that is interrupted", func(t *testing.T) {
+		rt, log := fakeShim(t)
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+		svcs := func() map[string]*compose.Service {
+			return map[string]*compose.Service{"web": {Image: "web", Restart: "always"}}
+		}
+		if err := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{}).Up(true); err != nil {
+			t.Fatalf("first up: %v", err)
+		}
+		rt.Stop("web.demo.opossum")
+		setShimEnv(rt, "RUN_HANG=web.demo.opossum")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		o := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{})
+		o.OnSignal(ctx)
+		done := make(chan error, 1)
+		go func() { done <- o.Up(false) }()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) && !hasLinePrefixAfter(log(), "run --name web.demo.opossum") {
+			time.Sleep(2 * time.Millisecond)
+		}
+		if !hasLinePrefixAfter(log(), "run --name web.demo.opossum") {
+			t.Fatalf("the foreground run never started, got %v", log())
+		}
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the interrupted up never returned")
+		}
+		if !tornDownAfterRun(log(), "web.demo.opossum") {
+			t.Errorf("an interrupted foreground up starts no supervisor and asks for everything to come down; web was left:\n%s", strings.Join(log(), "\n"))
+		}
+	})
+
+	t.Run("a service whose dependency this call rolls back", func(t *testing.T) {
+		rt, log := fakeShim(t)
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+		svcs := func() map[string]*compose.Service {
+			return map[string]*compose.Service{
+				"base":  {Image: "base"},
+				"cache": {Image: "cache", Restart: "always", DependsOn: compose.DependsOn{{Name: "base", Condition: compose.ConditionStarted}}},
+				"zdb":   healthyDB(),
+				"zweb":  {Image: "web", DependsOn: compose.DependsOn{{Name: "zdb", Condition: compose.ConditionHealthy}}},
+			}
+		}
+		o := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{})
+		if err := o.Up(true); err != nil {
+			t.Fatalf("first up: %v", err)
+		}
+		rt.Stop("base.demo.opossum")
+		rt.Stop("cache.demo.opossum")
+		setShimEnv(rt, "HEALTH_HANG=1")
+		o = orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{})
+		if err := o.Up(true); err == nil {
+			t.Fatal("the up should fail")
+		}
+		if !tornDownAfterRun(log(), "base.demo.opossum") {
+			t.Fatalf("base has no restart: and is rolled back, or this test says nothing:\n%s", strings.Join(log(), "\n"))
+		}
+		if !tornDownAfterRun(log(), "cache.demo.opossum") {
+			t.Errorf("cache depends on base, which was rolled back: it must not be left running on nothing:\n%s", strings.Join(log(), "\n"))
+		}
+	})
+
+	t.Run("a service whose dependency this call never touched", func(t *testing.T) {
+		rt, log := fakeShim(t)
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+		svcs := func() map[string]*compose.Service {
+			return map[string]*compose.Service{
+				"base":  {Image: "base"},
+				"cache": {Image: "cache", Restart: "always", DependsOn: compose.DependsOn{{Name: "base", Condition: compose.ConditionStarted}}},
+				"zdb":   healthyDB(),
+				"zweb":  {Image: "web", DependsOn: compose.DependsOn{{Name: "zdb", Condition: compose.ConditionHealthy}}},
+			}
+		}
+		if err := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{}).Up(true); err != nil {
+			t.Fatalf("first up: %v", err)
+		}
+		// Only cache stopped: base is still running and unchanged, so this call
+		// leaves it up to date and does not touch it.
+		rt.Stop("cache.demo.opossum")
+		setShimEnv(rt, "HEALTH_HANG=1")
+		var out bytes.Buffer
+		if err := orchestrator.New(project("demo", svcs()), rt, "opossum", &out).Up(true); err == nil {
+			t.Fatal("the up should fail")
+		}
+		if !strings.Contains(out.String(), "base is up to date") {
+			t.Fatalf("base should be left alone by this call, or this test says nothing:\n%s", out.String())
+		}
+		if tornDownAfterRun(log(), "cache.demo.opossum") {
+			t.Errorf("cache depends on base, which this call did not create and did not roll back: cache stays:\n%s", strings.Join(log(), "\n"))
+		}
+	})
+
+	t.Run("a service whose dependency is kept as well", func(t *testing.T) {
+		rt, log := fakeShim(t)
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+		svcs := func() map[string]*compose.Service {
+			return map[string]*compose.Service{
+				"base":  {Image: "base", Restart: "always"},
+				"cache": {Image: "cache", Restart: "always", DependsOn: compose.DependsOn{{Name: "base", Condition: compose.ConditionStarted}}},
+				"zdb":   healthyDB(),
+				"zweb":  {Image: "web", DependsOn: compose.DependsOn{{Name: "zdb", Condition: compose.ConditionHealthy}}},
+			}
+		}
+		if err := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{}).Up(true); err != nil {
+			t.Fatalf("first up: %v", err)
+		}
+		rt.Stop("base.demo.opossum")
+		rt.Stop("cache.demo.opossum")
+		setShimEnv(rt, "HEALTH_HANG=1")
+		o := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{})
+		if err := o.Up(true); err == nil {
+			t.Fatal("the up should fail")
+		}
+		for _, c := range []string{"base.demo.opossum", "cache.demo.opossum"} {
+			if tornDownAfterRun(log(), c) {
+				t.Errorf("%s asks to be kept up and so does everything it depends on: both stay:\n%s", c, strings.Join(log(), "\n"))
+			}
+		}
+	})
+
+	t.Run("a service whose dependency is a finished run-to-completion one", func(t *testing.T) {
+		rt, log := fakeShim(t)
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+		svcs := func() map[string]*compose.Service {
+			return map[string]*compose.Service{
+				"migrate": {Image: "migrate"},
+				"app": {Image: "app", Restart: "always",
+					DependsOn: compose.DependsOn{{Name: "migrate", Condition: compose.ConditionCompleted}}},
+				"zdb":  healthyDB(),
+				"zweb": {Image: "web", DependsOn: compose.DependsOn{{Name: "zdb", Condition: compose.ConditionHealthy}}},
+			}
+		}
+		if err := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{}).Up(true); err != nil {
+			t.Fatalf("first up: %v", err)
+		}
+		rt.Stop("app.demo.opossum")
+		setShimEnv(rt, "HEALTH_HANG=1")
+		o := orchestrator.New(project("demo", svcs()), rt, "opossum", &bytes.Buffer{})
+		if err := o.Up(true); err == nil {
+			t.Fatal("the up should fail")
+		}
+		if tornDownAfterRun(log(), "app.demo.opossum") {
+			t.Errorf("app only waited for migrate to finish, which loses it nothing: app stays:\n%s", strings.Join(log(), "\n"))
+		}
+	})
+
+	t.Run("a network a kept service is on", func(t *testing.T) {
+		rt, log := fakeShim(t)
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+		svcs := func(cacheNets compose.ServiceNetworks) map[string]*compose.Service {
+			return map[string]*compose.Service{
+				"db":    healthyDB(),
+				"web":   {Image: "web", DependsOn: compose.DependsOn{{Name: "db", Condition: compose.ConditionHealthy}}},
+				"cache": {Image: "cache", Restart: "always", Networks: cacheNets},
+			}
+		}
+		if err := orchestrator.New(project("demo", svcs(nil)), rt, "opossum", &bytes.Buffer{}).Up(true); err != nil {
+			t.Fatalf("first up: %v", err)
+		}
+		rt.Stop("cache.demo.opossum")
+		setShimEnv(rt, "HEALTH_HANG=1")
+		p := project("demo", svcs(compose.ServiceNetworks{"back"}))
+		p.Networks = map[string]compose.NetworkDecl{"back": {}}
+		if err := orchestrator.New(p, rt, "opossum", &bytes.Buffer{}).Up(true); err == nil {
+			t.Fatal("the up should fail")
+		}
+		lines := log()
+		if !hasLinePrefixAfter(lines, "network create demo-back") {
+			t.Fatalf("this call should have created the network cache is moved to:\n%s", strings.Join(lines, "\n"))
+		}
+		if hasLinePrefixAfter(lines, "network delete demo-back") {
+			t.Errorf("cache is left running on demo-back; the network stays:\n%s", strings.Join(lines, "\n"))
+		}
+	})
+}
+
+func countLinePrefix(lines []string, prefix string) int {
+	n := 0
+	for _, l := range lines {
+		if strings.HasPrefix(l, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func hasLinePrefixAfter(lines []string, prefix string) bool {
+	for _, l := range lines {
+		if strings.HasPrefix(l, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// The report tells what was left on purpose apart from everything else: a service
+// this call never touched (up to date) is not named as one it left running; two
+// that were kept are named in the plural; and a rollback that could not finish
+// still says what was kept.
+func TestFailedUpReportsWhatItKept(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stopBefore []string // restart: services that stopped before the failing up
+		env        []string
+		changeDB   bool
+		dbNew      bool // db and web are added by the failing up
+		want       []string
+		wantNot    []string
+	}{
+		{"an up-to-date restart service is not one it left running", nil, nil, true, false,
+			[]string{"Rolled back db", "nothing this `up` started is left running"}, []string{"cache is left running", "cache are left running"}},
+		{"two kept", []string{"cache", "cache2"}, nil, false, false,
+			[]string{"cache, cache2 are left running — they were there before"}, []string{"is left running", "but the container is still there"}},
+		{"one that could not be rolled back and one kept", []string{"cache"}, []string{"DELETE_STICKY=db.demo.opossum"}, false, true,
+			[]string{"still there", "cache is left running"},
+			// What was kept on purpose is not also reported as a rollback that did not
+			// finish. Names are joined into one sentence ("db, cache, but the container
+			// is still there"), so it is the end of the list that is looked for.
+			[]string{"cache, but the container is still there"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, _ := fakeShim(t)
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+			dbEnv := compose.Environment{"V=1"}
+			svcs := func(withDB bool) map[string]*compose.Service {
+				m := map[string]*compose.Service{
+					"cache":  {Image: "cache", Restart: "always"},
+					"cache2": {Image: "cache", Restart: "always"},
+				}
+				if withDB {
+					m["db"] = &compose.Service{Image: "db", Environment: dbEnv, Healthcheck: &compose.Healthcheck{
+						Interval: time.Millisecond, Test: []string{"true"}, Timeout: 100 * time.Millisecond, Retries: 1}}
+					m["web"] = &compose.Service{Image: "web", DependsOn: compose.DependsOn{{Name: "db", Condition: compose.ConditionHealthy}}}
+				}
+				return m
+			}
+			var out bytes.Buffer
+			if err := orchestrator.New(project("demo", svcs(!tc.dbNew)), rt, "opossum", &out).Up(true); err != nil {
+				t.Fatalf("first up: %v", err)
+			}
+			for _, n := range tc.stopBefore {
+				rt.Stop(n + ".demo.opossum")
+			}
+			out.Reset()
+			setShimEnv(rt, append([]string{"HEALTH_HANG=1"}, tc.env...)...)
+			if tc.changeDB {
+				dbEnv = compose.Environment{"V=2"}
+			}
+			if err := orchestrator.New(project("demo", svcs(true)), rt, "opossum", &out).Up(true); err == nil {
+				t.Fatal("the up should fail")
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("the report should say %q, got:\n%s", w, out.String())
+				}
+			}
+			for _, w := range tc.wantNot {
+				if strings.Contains(out.String(), w) {
+					t.Errorf("the report should not say %q, got:\n%s", w, out.String())
+				}
+			}
+		})
+	}
+}
+
+// A dry run changes nothing, so it does not clear the mark `opossum stop` left,
+// even when it fails with a service that looks kept.
+func TestFailedDryRunUpLeavesTheStopMarkAlone(t *testing.T) {
+	rt, _ := fakeShim(t)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	setShimEnv(rt, "INSPECT_PROJECT=demo", "STATE_DIR="+t.TempDir())
+	svcs := func(withBuild bool) map[string]*compose.Service {
+		m := map[string]*compose.Service{"cache": {Image: "cache", Restart: "always"}}
+		if withBuild {
+			m["zz"] = &compose.Service{Image: "zz", Build: &compose.Build{Context: "."}}
+		}
+		return m
+	}
+	o := orchestrator.New(project("demo", svcs(false)), rt, "opossum", &bytes.Buffer{})
+	if err := o.Up(true); err != nil {
+		t.Fatalf("first up: %v", err)
+	}
+	o.MarkStopped("cache")
+	setShimEnv(rt, "IMAGE_ABSENT=zz")
+	o = orchestrator.New(project("demo", svcs(true)), rt, "opossum", &bytes.Buffer{})
+	o.SetUpOptions(true, false, true, false, false)
+	o.SetDryRun(true)
+	if err := o.Up(true); err == nil {
+		t.Fatal("the dry run should fail (zz is not built and --no-build was given)")
+	}
+	if !o.WasStoppedByUsForTest("cache") {
+		t.Error("a dry run cleared the mark `opossum stop` left")
 	}
 }

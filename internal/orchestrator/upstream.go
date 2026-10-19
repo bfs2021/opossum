@@ -22,6 +22,8 @@ var UpstreamWordings = []runtime.UpstreamWording{
 	{Site: "runErrorHint", Wording: "failed to resolve"},
 	{Site: "runErrorHint", Wording: "in rootfs"},
 	{Site: "runErrorHint", Wording: "Address already in use"},
+	{Site: "execFormatError", Wording: "failed to exec ["},
+	{Site: "execFormatError", Wording: "Exec format error"},
 	{Site: "isStorageAttachmentError", Wording: "VZErrorDomain"},
 	{Site: "isStorageAttachmentError", Wording: "Code=2"},
 	{Site: "isStorageAttachmentError", Wording: "storage device attachment is invalid"},

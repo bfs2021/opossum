@@ -154,3 +154,27 @@ func TestARunFailureStraddlingTheHeadTailBoundaryIsStillDiagnosed(t *testing.T) 
 		t.Errorf("want the arm64 hint %s even though the failure line straddles the head/tail boundary, got: %v", want, err)
 	}
 }
+
+// The hint reaches the person: a start the runtime refuses with `Exec format
+// error` is an `up` that fails, and the error says what to make of it. The fake
+// says no container exists after the failed run because 1.5.0 leaves none
+// (testdata/error-wordings/exec-format-error-150.txt, `container ls -a` after both
+// the detached and the foreground run); without that the foreground path
+// would not diagnose it.
+func TestUpFailureCarriesTheProgramWrongArchHint(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	rtm, _ := fakeShim(t)
+	const stderr = `Error: failed to start process app.demo.opossum in container app.demo.opossum (cause: "vmexec error: internalError: "failed to exec [bin/app] Error Domain=NSPOSIXErrorDomain Code=8 "Exec format error""")` + "\n"
+	setShimEnv(rtm, "RUN_FAIL=app.demo.opossum", "RUN_FAIL_STDERR="+stderr, "INSPECT_ABSENT=app.demo.opossum")
+	proj, err := loadProject(t, "services:\n  app:\n    image: app:latest\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = orchestrator.New(proj, rtm, "opossum", &bytes.Buffer{}).Up(false)
+	if err == nil {
+		t.Fatal("want the up refused")
+	}
+	if want := "[OPSM-416]"; !strings.Contains(err.Error(), want) {
+		t.Errorf("want the hint %s in the failure, got: %v", want, err)
+	}
+}

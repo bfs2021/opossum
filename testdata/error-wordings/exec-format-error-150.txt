@@ -1,0 +1,49 @@
+$ container --version
+container CLI version 1.5.0
+
+# Taken 2026-10-19 by asking the runtime directly, on alpine:latest, with a bind mount of a directory
+# holding an executable file that has no `#!` line (`echo hi`, mode +x) and that file as the command.
+# The kernel answers ENOEXEC (`Code=8`) for it as it does for a binary of another architecture, so
+# the wording is the same one; an amd64 binary in an arm64 image was not built here. After either run
+# `container ls -a` listed no container of that name: the failed start leaves nothing behind.
+
+$ container run -d --name neko-enoexec-1 -v <dir>:/t alpine:latest /t/noshebang
+--- exit code: 1
+--- stdout ---
+--- stderr ---
+[0/6] [0s]
+[1/6] Fetching image [0s]
+[2/6] Unpacking image [0s]
+[3/6] Fetching kernel [0s]
+[4/6] Fetching init image [0s]
+[5/6] Unpacking init image [0s]
+[6/6] Starting container [0s]
+[6/6] Starting container [0s]
+Error: failed to start process neko-enoexec-1 in container neko-enoexec-1 (cause: "internalError: "failed to start process (cause: "internalError: "startProcess: failed to start process: internalError: "vmexec error: internalError: "failed to exec [/t/noshebang] Error Domain=NSPOSIXErrorDomain Code=8 "Exec format error""""")"")
+
+$ container run --name neko-enoexec-1 -v <dir>:/t alpine:latest /t/noshebang
+--- exit code: 1
+--- stdout ---
+--- stderr ---
+[0/6] [0s]
+[1/6] Fetching image [0s]
+[2/6] Unpacking image [0s]
+[3/6] Fetching kernel [0s]
+[4/6] Fetching init image [0s]
+[5/6] Unpacking init image [0s]
+[6/6] Starting container [0s]
+[6/6] Starting container [0s]
+Error: failed to exec [/t/noshebang] Error Domain=NSPOSIXErrorDomain Code=8 "Exec format error"
+Error: failed to start process neko-enoexec-1 in container neko-enoexec-1 (cause: "internalError: "failed to start process (cause: "internalError: "startProcess: failed to start process: internalError: "vmexec error: internalError: "failed to exec [/t/noshebang] Error Domain=NSPOSIXErrorDomain Code=8 "Exec format error""""")"")
+
+# Taken 2026-10-19, a second run of the same two commands under another name, asking `container ls -a` after each
+# (a header row and no row naming the container: the failed start leaves nothing behind).
+
+$ container run -d --name neko-enoexec-2 -v <dir>:/t alpine:latest /t/noshebang   # exit 1
+$ container ls -a   # after the detached run (rows naming neko-enoexec-2)
+ID        IMAGE                                                OS     ARCH   STATE    IP               CPUS  MEMORY   STARTED
+(rows: 0)
+$ container run --name neko-enoexec-2 -v <dir>:/t alpine:latest /t/noshebang   # exit 1   (the same name again: not 'already exists')
+$ container ls -a   # after the foreground run
+ID        IMAGE                                                OS     ARCH   STATE    IP               CPUS  MEMORY   STARTED
+(rows: 0)
