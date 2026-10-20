@@ -92,6 +92,25 @@ quarantine flag, so there is no Gatekeeper prompt on first run. (Published with
 each tagged release; `darwin/arm64` only, since the runtime requires macOS 26 on
 Apple silicon.)
 
+#### Upgrading
+
+```sh
+brew update
+brew upgrade --cask suruseas/opossum/opossum
+```
+
+(Casks, which opossum has been since v0.24.2, are upgraded with `--cask`; see
+the next heading for an install that is still the old formula.) You do not need
+to stop a running project first. A project brought up by an earlier version is
+recognised by the new one as its own, and the data in its named volumes is
+still there after the upgrade. This was measured from v0.24.2, v0.43.0 and
+v0.47.1 to v0.48.0; other pairs of versions were not tried. A service with
+`restart:` keeps the supervisor the earlier version started, which carries on
+until `opossum down` stops it. An image the earlier version built under another
+name (v0.24.2 named the image of a service with both `build:` and `image:`
+`<project>-<service>`) is not found by the new one, so the first `up` after the
+upgrade recreates that container; what is in its volumes stays.
+
 #### Already installed as a formula (v0.7.0 or earlier)?
 
 The formula does not turn into the cask by itself. Third-party casks sit behind
@@ -281,11 +300,13 @@ using docker-compose's precedence: `compose.yaml`, `compose.yml`,
 `docker-compose.yaml`, then `docker-compose.yml` — so an existing
 `docker-compose.yml` runs as-is.
 
-Try the bundled examples — a build-free `hello.yaml` and a full-feature
+Try the examples in the repository — a build-free `hello.yaml` and a full-feature
 `compose.yaml`. See [`examples/README.md`](examples/README.md) for a walkthrough
-of every subcommand:
+of every subcommand. They are not part of the Homebrew install or the release
+tarball, so clone the repository first:
 
 ```sh
+git clone https://github.com/suruseas/opossum && cd opossum
 cd examples
 opossum -f hello.yaml up
 opossum -f hello.yaml ps

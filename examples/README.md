@@ -1,6 +1,9 @@
 # opossum examples
 
-Two bundled stacks, and a walkthrough of every subcommand.
+Two stacks, and a walkthrough of every subcommand. These files are in the
+repository, not in the Homebrew install or the release tarball: clone it
+(`git clone https://github.com/suruseas/opossum && cd opossum`) or open
+them on GitHub.
 
 | File | Needs a build? | Demonstrates |
 |------|----------------|--------------|

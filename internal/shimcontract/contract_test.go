@@ -103,6 +103,64 @@ var contract = []struct {
 	// container passes every test that only needs a container to exist, and
 	// quietly turns "which port does THIS one hold" into a constant — a
 	// question opossum asks whenever a host port moves between services.
+	// The image a container was made from comes back as the runtime keeps it, under
+	// `configuration.image.reference`: written out in full (registry, repository,
+	// tag) whatever way the run spelled it, and without its tag when it carries a
+	// digest (container 1.5.0, testdata/real-cli-output.md). A fake that wrote none
+	// leaves every `ps` test on the branch a real runtime never takes — one that
+	// does not say what the container runs — and a fake that echoed what the run
+	// was given would agree with the file whatever the file says.
+	{"a container's image is kept as the runtime keeps it", nil, []step{
+		{argv: []string{"run", "-d", "--name", "NAME", "alpine:3.20"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/library/alpine:3.20"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		{argv: []string{"run", "-d", "--name", "NAME", "alpine"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/library/alpine:latest"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		{argv: []string{"run", "-d", "--name", "NAME", "docker.io/alpine:3.20"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/library/alpine:3.20"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		{argv: []string{"run", "-d", "--name", "NAME", "org/app:2"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/org/app:2"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		{argv: []string{"run", "-d", "--name", "NAME", "ghcr.io/o/app:1"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"ghcr.io/o/app:1"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		// The tag is dropped when there is a digest.
+		{argv: []string{"run", "-d", "--name", "NAME", "alpine:3.20@sha256:abc"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/library/alpine@sha256:abc"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		// A flag's value is not the image: a flag that takes one is read past.
+		{argv: []string{"run", "-d", "--name", "NAME", "-e", "A=b", "alpine:3.20"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/library/alpine:3.20"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		// A `--flag=value` is complete in itself, the flags that take no value take
+		// none, and what follows the image is its command.
+		{argv: []string{"run", "-d", "--name", "NAME", "--label=a=b", "alpine:3.20", "sleep", "60"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/library/alpine:3.20"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		{argv: []string{"run", "-d", "--name", "NAME", "--rm", "alpine:3.20"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/library/alpine:3.20"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		{argv: []string{"run", "-d", "--name", "NAME", "--init", "alpine:3.20"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/library/alpine:3.20"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		{argv: []string{"run", "-d", "--name", "NAME", "--read-only", "alpine:3.20"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/library/alpine:3.20"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		// A registry is told from a Hub organisation by its first part: a dot or a
+		// port, or `localhost`, makes it a host — and `docker.io` is Hub's own, so no
+		// `library/` goes in front of an organisation that follows it.
+		{argv: []string{"run", "-d", "--name", "NAME", "localhost:5000/app"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"localhost:5000/app:latest"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		{argv: []string{"run", "-d", "--name", "NAME", "localhost/app:1"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"localhost/app:1"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+		{argv: []string{"run", "-d", "--name", "NAME", "docker.io/org/app:2"}},
+		{argv: []string{"inspect", "NAME"}, has: `"reference":"docker.io/org/app:2"`},
+		{argv: []string{"delete", "--force", "NAME"}},
+	}},
 	{"a container publishes the ports its run was given", nil, []step{
 		{argv: []string{"run", "-d", "--name", "NAME", "-p", "47080:80", "alpine"}},
 		{argv: []string{"inspect", "NAME"}, has: `"hostPort":47080`},

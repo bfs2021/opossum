@@ -120,6 +120,15 @@ func strictContainers(t *testing.T, rt *runtime.Runtime, names ...string) {
 // real runtime shows the ones it was run with.
 func strictContainerWith(t *testing.T, rt *runtime.Runtime, n string, extra ...string) {
 	t.Helper()
+	strictContainerOf(t, rt, n, "alpine", extra...)
+}
+
+// strictContainerOf is strictContainerWith for a container made from a given image: the
+// image the fake keeps, and `inspect` answers with, as the real runtime does
+// (`configuration.image.reference`). A test of what `ps` shows runs the container from the
+// image the service has, so that what it reads is the answer of a runtime that made it.
+func strictContainerOf(t *testing.T, rt *runtime.Runtime, n, image string, extra ...string) {
+	t.Helper()
 	have := false
 	for _, kv := range rt.Env {
 		if strings.HasPrefix(kv, "STATE_DIR=") {
@@ -138,7 +147,7 @@ func strictContainerWith(t *testing.T, rt *runtime.Runtime, n string, extra ...s
 		args = append(args, "--label=opossum.project="+parts[len(parts)-2])
 	}
 	args = append(args, extra...)
-	cmd := exec.Command(fakeShimBin, append(args, "alpine")...)
+	cmd := exec.Command(fakeShimBin, append(args, image)...)
 	// Not into the log: what the runtime was asked is what the command under test asked.
 	cmd.Env = append(append([]string(nil), rt.Env...), "FAKE_LOG=")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -2236,7 +2245,7 @@ func TestUpPrintsHostAddrForPublishedPorts(t *testing.T) {
 
 func TestPsReportsInspectedIP(t *testing.T) {
 	rt, _ := fakeShim(t)
-	strictContainerWith(t, rt, "db.demo.opossum", "-p", "8080:8080")
+	strictContainerOf(t, rt, "db.demo.opossum", "postgres:16", "-p", "8080:8080")
 	p := project("demo", map[string]*compose.Service{
 		"db": {Image: "postgres:16"},
 	})

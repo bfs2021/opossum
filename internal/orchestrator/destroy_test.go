@@ -208,7 +208,7 @@ func TestStartedListsWhatSurvivedARollback(t *testing.T) {
 			Image:     "web",
 			DependsOn: compose.DependsOn{{Name: "db", Condition: compose.ConditionHealthy}},
 		},
-		"cache": {Image: "cache", Restart: "always"},
+		"zcache": {Image: "cache", Restart: "always"},
 	})
 	o := orchestrator.New(p, rt, "opossum", &bytes.Buffer{})
 	// First: everything comes up, so the config hashes are recorded.
@@ -217,7 +217,7 @@ func TestStartedListsWhatSurvivedARollback(t *testing.T) {
 	}
 
 	// Second: db's healthcheck never passes, so the bring-up fails and rolls back.
-	// db and cache are unchanged, so they are skipped — and survive.
+	// db and zcache are unchanged, so they are skipped — and survive.
 	setShimEnv(rt, "HEALTH_HANG=1")
 	if err := o.Up(true); err == nil {
 		t.Fatal("the second up should fail")
@@ -226,7 +226,7 @@ func TestStartedListsWhatSurvivedARollback(t *testing.T) {
 	// answer, or the whole order, would satisfy a membership test.
 	got := append([]string(nil), o.Started()...)
 	sort.Strings(got)
-	want := []string{"cache", "db", "web"}
+	want := []string{"db", "web", "zcache"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Started() = %v, want %v — all three were left alone by the failed call (it "+
 			"never got past db's healthcheck) and are still running from the first up", got, want)

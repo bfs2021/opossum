@@ -2043,7 +2043,13 @@ type inspectResult struct {
 		} `json:"networks"`
 	} `json:"status"`
 	Configuration struct {
-		ID             string            `json:"id"` // the container's name (Apple `container` uses name as id)
+		ID string `json:"id"` // the container's name (Apple `container` uses name as id)
+		// The image the container was made from, as the runtime spelled it when
+		// it was made (`docker.io/library/alpine:3.20`) — not what a compose file
+		// says today.
+		Image struct {
+			Reference string `json:"reference"`
+		} `json:"image"`
 		Labels         map[string]string `json:"labels"`
 		PublishedPorts []struct {
 			ContainerPort int    `json:"containerPort"`
@@ -2178,6 +2184,9 @@ type ContainerInfo struct {
 	IP     string // interface address, IPv4 preferred (IPv6 fallback)
 	Ports  []PortMapping
 	Labels map[string]string
+	// Image is the reference the container was made from, fully qualified as
+	// the runtime keeps it; "" when the runtime did not say.
+	Image string
 	// Unknown is set when the runtime could not be asked — the CLI failed for a
 	// reason other than "not found", or its answer could not be read. Exists is
 	// false then too, but "gone" and "could not ask" are different facts: a
@@ -2203,7 +2212,7 @@ func (r *Runtime) Inspect(name string) ContainerInfo {
 		return ContainerInfo{Unknown: true}
 	}
 	res := results[0]
-	info := ContainerInfo{Exists: true, State: res.Status.State, Labels: res.Configuration.Labels}
+	info := ContainerInfo{Exists: true, State: res.Status.State, Labels: res.Configuration.Labels, Image: res.Configuration.Image.Reference}
 	// Prefer the IPv4 interface address; fall back to IPv6 (IPv6-only networks).
 	for _, n := range res.Status.Networks {
 		if ip := trimMask(n.IPv4Address); ip != "" {

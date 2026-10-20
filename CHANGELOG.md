@@ -6,6 +6,13 @@ All notable changes to opossum are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.48.1] - 2026-10-21
+
+### Fixed
+
+- `opossum ps` now shows, in the IMAGE column (and in `--format json`), the image each container is actually running, not the image the compose file and environment resolve to at the moment `ps` is typed. After `TAG=3.20 opossum up`, a plain `opossum ps` used to say `alpine:3.19` (the file's default) for a container running `alpine:3.20`; it now says `alpine:3.20`. A service whose image is the same one the file names keeps the file's spelling (`image: alpine` still reads `alpine`). (A file that writes the image differently from how the runtime keeps it — with `docker.io/` or `library/`, or with a tag next to a digest — shows the runtime's name when the image differs — without `docker.io/`, and without `library/` when the name is a single path segment —, where `docker compose ps` prints the string it resolved at `up`.)
+- `opossum up web --foreground` no longer refuses with "can run only one service in the foreground, but 2 would start" when `web`'s dependencies are already running. A running dependency is not a second service to attach to: it is left alone when it is the container the file describes, as `up` leaves it when detached, and recreated in the background when the file has changed it (or with `--build`), and it stays up whichever way the foreground service ends — Ctrl-C or a failure of `web` does not take it away, and the report says so. If the dependency itself then fails (its healthcheck does not pass, say), it stays running too, as under `docker compose`; a detached `up web` rolls it back. Unlike a detached `up`, this does not then check that a recreated dependency stayed up or watch it for its `restart:` policy. A dependency that is stopped would still have to be started as well, and is still refused, with the message naming only the services that would start.
+
 ## [0.48.0] - 2026-10-20
 
 ### Added
@@ -2935,7 +2942,8 @@ First tagged release. Everything opossum can do so far.
 - `restart` reassigns a container's IP (the runtime does this on `start`); the
   name and config are preserved, so name-based discovery is unaffected.
 
-[Unreleased]: https://github.com/suruseas/opossum/compare/v0.48.0...HEAD
+[Unreleased]: https://github.com/suruseas/opossum/compare/v0.48.1...HEAD
+[0.48.1]: https://github.com/suruseas/opossum/compare/v0.48.0...v0.48.1
 [0.48.0]: https://github.com/suruseas/opossum/compare/v0.47.1...v0.48.0
 [0.47.1]: https://github.com/suruseas/opossum/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/suruseas/opossum/compare/v0.46.0...v0.47.0

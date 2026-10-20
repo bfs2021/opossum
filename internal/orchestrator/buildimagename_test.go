@@ -127,6 +127,11 @@ func TestEveryCommandAgreesOnABuiltImagesName(t *testing.T) {
 		t.Run(nb.shape+"/ps", func(t *testing.T) {
 			rt, _ := fakeShim(t)
 			strictContainers(t, rt, "web.demo.opossum")
+			// The name `ps` resolves for the service is what is measured here, so the
+			// runtime is one that does not say which image the container was made from:
+			// seeding it with the answer would have `ps` agree with the test whatever
+			// name it resolved.
+			setShimEnv(rt, "INSPECT_IMAGE_NONE=1")
 			var out bytes.Buffer
 			if err := orchestrator.New(namedProject(nb.svc), rt, "opossum", &out).Ps(orchestrator.PsOptions{Format: "json"}); err != nil {
 				t.Fatal(err)

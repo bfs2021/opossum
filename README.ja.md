@@ -67,6 +67,15 @@ brew install suruseas/opossum/opossum
 
 ビルド済みバイナリが入るので、Go ツールチェインもローカルビルドも不要です。依存として Apple の `container` ランタイムも一緒に入ります。v0.24.2 から tap は opossum を cask として配布しています——インストールコマンドは変わらず、バイナリは quarantine フラグ無しで届くため初回起動時の Gatekeeper の確認も出ません。タグ付きリリースごとに更新され、ランタイムが Apple silicon の macOS 26 を要求する関係で `darwin/arm64` のみの提供です。
 
+#### 版を上げる
+
+```sh
+brew update
+brew upgrade --cask suruseas/opossum/opossum
+```
+
+（v0.24.2 から opossum は cask なので、`--cask` で上げます。まだ古い formula のままの場合は次の見出しを見てください。）動いている project を先に止める必要はありません。前の版で `up` した project は、新しい版がそのまま自分のものとして扱い、named volume のデータも上げたあとに残ります。v0.24.2・v0.43.0・v0.47.1 から v0.48.0 へ上げて測ったもので、ほかの版の組は試していません。`restart:` を持つ service は、前の版が立てた supervisor が動きつづけ、`opossum down` が止めます。前の版が別の名前で build した image（v0.24.2 は、`build:` と `image:` を両方持つ service の image を `<project>-<service>` と呼んでいました）は新しい版に見つけられないので、上げたあとの最初の `up` でその container が作り直されます。volume の中身は残ります。
+
 #### すでに formula（v0.7.0 以前）で入れている場合
 
 formula は自動では cask に切り替わりません。サードパーティの cask は Homebrew の信頼ゲート（Homebrew 5.1.15 以降）の内側にあるため、`brew update` は移行を告知しますが、警告で止まってインストールまでは進みません。次の4コマンドで完了させてください：
@@ -195,9 +204,10 @@ opossum -p myproj up                     # プロジェクト名を上書き
 
 `-f` も `COMPOSE_FILE`（docker compose と同じく shell か `.env` から読みます）も無ければ、opossum は作業ディレクトリの compose ファイルを docker-compose と同じ優先順（`compose.yaml`、`compose.yml`、`docker-compose.yaml`、`docker-compose.yml`）で探します。手元の `docker-compose.yml` はそのまま動きます。
 
-同梱の例（ビルド不要の `hello.yaml` とフル機能の `compose.yaml`）で試せます。各サブコマンドの実例は [`examples/README.md`](examples/README.md) にあります：
+リポジトリの例（ビルド不要の `hello.yaml` とフル機能の `compose.yaml`）で試せます。各サブコマンドの実例は [`examples/README.md`](examples/README.md) にあります。例は Homebrew で入れたものにも、リリースの tarball にも入っていないので、先にリポジトリを clone してください：
 
 ```sh
+git clone https://github.com/suruseas/opossum && cd opossum
 cd examples
 opossum -f hello.yaml up
 opossum -f hello.yaml ps

@@ -475,6 +475,14 @@ func strictContainers(t *testing.T, names ...string) {
 // runtime shows the ones it was run with.
 func strictContainerWith(t *testing.T, n string, extra ...string) {
 	t.Helper()
+	strictContainerOf(t, n, "alpine", extra...)
+}
+
+// strictContainerOf is strictContainerWith for a container made from a given image: the image
+// the fake keeps and `inspect` answers with, as the real runtime does. A test of what `ps` shows
+// runs the container from the image its service has.
+func strictContainerOf(t *testing.T, n, image string, extra ...string) {
+	t.Helper()
 	// The fake remembers what was run in STATE_DIR, and without one it records nothing and does not
 	// look: the knob would be set and do nothing, and the test would pass on "every name is there".
 	if os.Getenv("STATE_DIR") == "" {
@@ -494,7 +502,7 @@ func strictContainerWith(t *testing.T, n string, extra ...string) {
 		args = append(args, "--label=opossum.project="+parts[len(parts)-2])
 	}
 	args = append(args, extra...)
-	cmd := exec.Command(fakeShimBin, append(args, "alpine")...)
+	cmd := exec.Command(fakeShimBin, append(args, image)...)
 	cmd.Env = append(os.Environ(), "FAKE_LOG=")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

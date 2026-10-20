@@ -23,7 +23,7 @@ opossum doctor
 ```
 
 - `container system start` starts Apple's container system. If it is already
-  running it says so; nothing is harmed.
+  running it does nothing harmful: it prints the same lines and exits 0.
 - `sudo container system dns create opossum` registers a local DNS domain so
   your services can find each other by name. It asks for your password and only
   needs to be done once per Mac.

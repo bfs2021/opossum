@@ -85,3 +85,7 @@ func SupervisorPidFileExistsForTest(project string) bool {
 // WasStoppedByUsForTest is whether `opossum stop` left its mark on a service: the
 // supervisor leaves a marked service alone.
 func (o *Orchestrator) WasStoppedByUsForTest(service string) bool { return o.wasStoppedByUs(service) }
+
+// CanonicalImageRefForTest is canonicalImageRef, for the table test that holds
+// the spellings of an image it makes equal.
+func CanonicalImageRefForTest(ref string) string { return canonicalImageRef(ref) }

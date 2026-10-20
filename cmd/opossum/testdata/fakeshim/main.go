@@ -103,6 +103,14 @@ func main() {
 		}
 		return filepath.Join(stopDir, "ports-"+hex.EncodeToString([]byte(name)))
 	}
+	// Where the image a run was made from is remembered, so that a later inspect
+	// answers with it as the runtime keeps it.
+	imagePath := func(name string) string {
+		if stopDir == "" {
+			return ""
+		}
+		return filepath.Join(stopDir, "image-"+hex.EncodeToString([]byte(name)))
+	}
 	// publishedPorts renders what a run recorded, in the shape the real CLI
 	// answers: the address as the address it names (bare, where a compose file
 	// writes it bracketed), and a range as ONE entry at its low port with a
@@ -359,6 +367,13 @@ func main() {
 				}
 				if p := portsPath(a); p != "" {
 					_ = os.WriteFile(p, []byte(strings.Join(runPorts, ",")), 0o644)
+				}
+				if p := imagePath(a); p != "" {
+					if img := runImage(args); img != "" {
+						_ = os.WriteFile(p, []byte(keptReference(img)), 0o644)
+					} else {
+						_ = os.Remove(p)
+					}
 				}
 				if p := createdPath(a); p != "" {
 					_ = os.WriteFile(p, []byte("1"), 0o644)
@@ -830,8 +845,16 @@ func main() {
 		if state == "" {
 			state = "running"
 		}
-		fmt.Printf(`[{"status":{"state":"%s","networks":[{"ipv4Address":"192.168.66.9/24"}]},"configuration":{"labels":{%s},"networks":[{"network":"demo-net-configured"}],"publishedPorts":[%s]}}]`+"\n",
-			state, labels, publishedPorts(arg(1)))
+		// The image this shim ran the name from, as the runtime keeps it; a name it
+		// never ran carries none.
+		image := ""
+		if p := imagePath(arg(1)); p != "" {
+			if b, err := os.ReadFile(p); err == nil {
+				image = fmt.Sprintf(`"image":{"reference":%q},`, string(b))
+			}
+		}
+		fmt.Printf(`[{"status":{"state":"%s","networks":[{"ipv4Address":"192.168.66.9/24"}]},"configuration":{%s"labels":{%s},"networks":[{"network":"demo-net-configured"}],"publishedPorts":[%s]}}]`+"\n",
+			state, image, labels, publishedPorts(arg(1)))
 	case "stats":
 		// `stats --no-stream --format json <names…>` returns a guest-view JSON array.
 		jsonForm := false
@@ -1443,4 +1466,55 @@ func dashValueRefusal(args []string, metavars map[string]string) string {
 		}
 	}
 	return ""
+}
+
+// runImage is the image a `run` names: the first argument that is not a flag or
+// a flag's value, as far as the shapes opossum passes go (the flags that take no
+// value are listed; a `--flag=value` is complete in itself; any other flag takes
+// the next word). Not read the way the real CLI reads them: combined short flags
+// (`-it`), `--`, and `--x=` with an empty value.
+func runImage(args []string) string {
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-d" || a == "--detach" || a == "-i" || a == "--interactive" || a == "-t" || a == "--tty" ||
+			a == "--init" || a == "--no-dns" || a == "--read-only" || a == "--rm" || a == "--remove" ||
+			a == "--rosetta" || a == "--ssh" || a == "--virtualization":
+		case strings.HasPrefix(a, "--") && strings.Contains(a, "="):
+		case strings.HasPrefix(a, "-"):
+			i++
+		default:
+			return a
+		}
+	}
+	return ""
+}
+
+// keptReference is how the runtime keeps an image's reference: written out in
+// full (registry, repository, tag), a digest reference without its tag (container
+// 1.5.0). An image built here is kept as written, but nothing in a fake knows
+// which is which, so every one is written out.
+func keptReference(ref string) string {
+	name, digest, hasDigest := strings.Cut(ref, "@")
+	first, rest, hasSlash := strings.Cut(name, "/")
+	switch {
+	case !hasSlash:
+		name = "docker.io/library/" + name
+	case first == "docker.io" && !strings.Contains(rest, "/"):
+		name = "docker.io/library/" + rest
+	case !strings.ContainsAny(first, ".:") && first != "localhost":
+		name = "docker.io/" + name
+	}
+	slash := strings.LastIndexByte(name, '/')
+	if colon := strings.IndexByte(name[slash+1:], ':'); colon >= 0 {
+		if hasDigest {
+			name = name[:slash+1+colon]
+		}
+	} else if !hasDigest {
+		name += ":latest"
+	}
+	if hasDigest {
+		return name + "@" + digest
+	}
+	return name
 }

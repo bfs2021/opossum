@@ -1615,8 +1615,8 @@ func TestStartupOrderPlacesAServiceWithAnUndefinedDependencyByName(t *testing.T)
 	}
 }
 
-// depends_on may name a service twice; it still waits once for it, and is
-// ready as soon as it is placed, ahead of a later-named service.
+// depends_on may name a service twice; the dependency is placed once, just
+// before a, ahead of the later-named c.
 func TestStartupOrderAServiceListedTwiceInDependsOnIsStillPlacedWhenItsDependencyIs(t *testing.T) {
 	p, err := Load(writeTemp(t, `
 services:
@@ -1655,19 +1655,17 @@ func TestStartupOrderReadingAGatedCycleThroughAnUndefinedDependency(t *testing.T
 	}
 }
 
-// The order depends_on is written in does not change the order: [e, a] and
-// [a, e] both put f after the later of the two, and ahead of g by name.
+// The order depends_on is written in does not change the order: f is walked
+// first, by name, with y and z still to place, so they come before it in name
+// order whether it lists [z, y] or [y, z].
 func TestStartupOrderIsTheSameWhicheverWayDependsOnIsListed(t *testing.T) {
-	for _, deps := range []string{"[e, a]", "[a, e]"} {
+	for _, deps := range []string{"[z, y]", "[y, z]"} {
 		t.Run(deps, func(t *testing.T) {
 			p, err := Load(writeTemp(t, `
 services:
-  a: {image: x, depends_on: [b]}
-  b: {image: x, depends_on: [d]}
-  d: {image: x}
-  e: {image: x}
   f: {image: x, depends_on: `+deps+`}
-  g: {image: x, depends_on: [d]}
+  y: {image: x}
+  z: {image: x}
 `))
 			if err != nil {
 				t.Fatalf("load: %v", err)
@@ -1676,16 +1674,15 @@ services:
 			if err != nil {
 				t.Fatalf("StartupOrder: %v", err)
 			}
-			want := []string{"d", "b", "a", "e", "f", "g"}
-			if !reflect.DeepEqual(got, want) {
+			if want := []string{"y", "z", "f"}; !reflect.DeepEqual(got, want) {
 				t.Errorf("got %v, want %v", got, want)
 			}
 		})
 	}
 }
 
-// Ready services come by name however many there are: a becomes ready once
-// s00 is placed, and goes next, ahead of s01 and the rest.
+// Services come by name however many there are: a is walked first, pulls s00
+// in just before it, and the walk goes on with s01 and the rest.
 func TestStartupOrderKeepsNameOrderAmongManyReadyServices(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("services:\n  a: {image: x, depends_on: [s00]}\n")
@@ -1709,9 +1706,10 @@ func TestStartupOrderKeepsNameOrderAmongManyReadyServices(t *testing.T) {
 	}
 }
 
-// Independent services read through StartupOrderTolerant come in name order,
-// the order the map holding them does not give.
-func TestStartupOrderTolerantPlacesIndependentServicesByName(t *testing.T) {
+// Services read through StartupOrderTolerant come in name order, the order the
+// map holding them does not give; e waits on c, so it is placed after c and
+// after d, which is named before it.
+func TestStartupOrderTolerantPlacesServicesByName(t *testing.T) {
 	p, err := Load(writeTemp(t, `
 services:
   e: {image: x, depends_on: [c]}

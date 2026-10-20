@@ -93,6 +93,30 @@ marker() {
   # `demo__hid` the same marker, where the runtime keeps them apart.
   printf '%s/%s=%s' "$STATE_DIR" "$1" "$(printf '%s' "$2" | od -An -tx1 | tr -d ' \n')"
 }
+# kept_ref REF: how the runtime keeps an image's reference — written out in full
+# (registry, repository, tag), and without its tag when it carries a digest
+# (container 1.5.0, testdata/real-cli-output.md). An image built here is kept as
+# written by the real one; nothing in this fake knows which is which, so every one
+# is written out.
+kept_ref() {
+  _ref=$1 _digest=
+  case $_ref in *@*) _digest=@${_ref#*@}; _ref=${_ref%%@*} ;; esac
+  case $_ref in
+    */*)
+      _first=${_ref%%/*} _rest=${_ref#*/}
+      case $_first in
+        docker.io) case $_rest in */*) : ;; *) _ref=docker.io/library/$_rest ;; esac ;;
+        *.*|*:*|localhost) : ;;
+        *) _ref=docker.io/$_ref ;;
+      esac ;;
+    *) _ref=docker.io/library/$_ref ;;
+  esac
+  case ${_ref##*/} in
+    *:*) if [ -n "$_digest" ]; then _ref=${_ref%:*}; fi ;;
+    *) if [ -z "$_digest" ]; then _ref=$_ref:latest; fi ;;
+  esac
+  printf '%s%s' "$_ref" "$_digest"
+}
 # is_there NAME: whether a container of this name is there as far as this fake
 # is concerned — one named in $INSPECT_ABSENT was never made, one the delete
 # case marked gone is no longer there (and with $INSPECT_STRICT, one nothing ran is not). Both answers have to reach every
@@ -368,7 +392,7 @@ case "$1" in
     # now passes such values combined, `--user=-1`, #996), and a flag with no
     # value at the end. The letters are spelled out: a range can take other
     # letters in some locales.
-    name= given= want= n=0
+    name= given= want= n=0 image=
     for a in "$@"; do
       n=$((n+1)); [ "$n" -eq 1 ] && continue  # "run"
       if [ -n "$want" ]; then
@@ -391,7 +415,7 @@ case "$1" in
         # its value.
         --*=*) : ;;
         -*) want=value ;;
-        *) break ;;
+        *) image=$a; break ;;
       esac
     done
     if [ "$want" = name ]; then printf "Error: Missing value for '--name <name>'\n" >&2; exit 64; fi
@@ -553,6 +577,7 @@ case "$1" in
         m=$(marker stopped "$a"); if [ -n "$m" ]; then rm -f "$m"; fi
         m=$(marker project "$a"); if [ -n "$m" ]; then printf '%s' "$proj" > "$m"; fi
         m=$(marker ports "$a"); if [ -n "$m" ]; then printf '%s' "$pub" > "$m"; fi
+        m=$(marker image "$a"); if [ -n "$m" ]; then if [ -n "$image" ]; then kept_ref "$image" > "$m"; else rm -f "$m"; fi; fi
         m=$(marker created "$a"); if [ -n "$m" ]; then : > "$m"; fi
       fi
       prev=$a
@@ -765,9 +790,14 @@ case "$1" in
     if [ -n "$pm" ] && [ -e "$pm" ]; then
       published=$(publishedJSON "$(cat "$pm")")
     fi
-    sed -e "s/\"state\":\"STATE\"/\"state\":\"$state\"/" -e "s/\"labels\":{LABELS}/\"labels\":{$labels}/" \
+    # The image this fixture ran the name from, as the runtime keeps it; a name it
+    # never ran carries none.
+    imagejson=
+    im=$(marker image "$2")
+    if [ -n "$im" ] && [ -e "$im" ]; then imagejson="\"image\":{\"reference\":\"$(cat "$im")\"},"; fi
+    sed -e "s/\"state\":\"STATE\"/\"state\":\"$state\"/" -e "s/\"labels\":{LABELS}/\"labels\":{$labels}/" -e "s|@IMAGE@|$imagejson|" \
         -e "s|\"publishedPorts\":\[PUBLISHED\]|\"publishedPorts\":[$published]|" <<'JSON'
-[{"status":{"state":"STATE","networks":[{"network":"demo-net","ipv4Address":"192.168.64.10/24","ipv6Address":"fdee:0:0:0::10/64","ipv4Gateway":"192.168.64.1"}]},"configuration":{"labels":{LABELS},"networks":[{"network":"demo-net-configured"}],"publishedPorts":[PUBLISHED]}}]
+[{"status":{"state":"STATE","networks":[{"network":"demo-net","ipv4Address":"192.168.64.10/24","ipv6Address":"fdee:0:0:0::10/64","ipv4Gateway":"192.168.64.1"}]},"configuration":{@IMAGE@"labels":{LABELS},"networks":[{"network":"demo-net-configured"}],"publishedPorts":[PUBLISHED]}}]
 JSON
     ;;
   stats)

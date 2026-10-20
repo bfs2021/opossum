@@ -2336,10 +2336,30 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 	// runtime's foreground `run` blocks until it exits, so a second such service
 	// would never start. Reject early (before touching anything) rather than hang.
 	// One-shot services run to completion, so they don't count.
+	//
+	// With services named, a dependency that is already running takes no part in
+	// the foreground: it is left alone when it is the container the file
+	// describes, as it is when detached, and recreated detached when it is not
+	// (what `up db` would do), so it is not a second service to attach to.
+	var leftRunning map[string]bool
+	if !detach && len(named) > 0 && !o.up.forceRecreate {
+		leftRunning = map[string]bool{}
+		for _, name := range order {
+			if named[name] {
+				continue
+			}
+			if info := o.rt.Inspect(o.containerName(name)); info.Exists && info.State == "running" {
+				leftRunning[name] = true
+			}
+		}
+	}
+	// The running dependencies this `up` recreated in the background: up for good
+	// as after `up db`, so a rollback leaves them standing (see where it is set).
+	stays := map[string]bool{}
 	if !detach {
 		var fg []string
 		for _, name := range order {
-			if !oneShot[name] {
+			if !oneShot[name] && !leftRunning[name] {
 				fg = append(fg, name)
 			}
 		}
@@ -2480,7 +2500,10 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 		// known when its dependents are asked.
 		kept := map[string]bool{}
 		for _, name := range order {
-			if wasInterrupted || o.up.dryRun || !createdSvc[name] || !existedBefore[name] {
+			// A dependency this up recreated in the background is left by its own
+			// rule below (`stays`): it is not here a second time, and `restart:` is
+			// not why it is up.
+			if wasInterrupted || o.up.dryRun || !createdSvc[name] || !existedBefore[name] || stays[name] {
 				continue
 			}
 			svc := o.Project.Services[name]
@@ -2509,13 +2532,16 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 			}
 		}
 		keptNets := map[string]bool{}
-		for name := range kept {
+		for _, name := range order {
+			if !kept[name] && !stays[name] {
+				continue
+			}
 			for _, rn := range o.networksFor(o.Project.Services[name]) {
 				keptNets[rn.name] = true
 			}
 		}
 		for i := len(started) - 1; i >= 0; i-- {
-			if name, ok := o.serviceOfContainer(order, started[i]); ok && kept[name] {
+			if name, ok := o.serviceOfContainer(order, started[i]); ok && (kept[name] || stays[name]) {
 				continue
 			}
 			o.rt.Stop(started[i])
@@ -2537,7 +2563,7 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 		if len(started) > 0 && !o.up.dryRun {
 			var gone, left, unknown []string
 			for _, name := range order {
-				if !createdSvc[name] || kept[name] {
+				if !createdSvc[name] || kept[name] || stays[name] {
 					continue
 				}
 				switch info := o.rt.Inspect(o.containerName(name)); {
@@ -2577,11 +2603,28 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 					keptNames = append(keptNames, name)
 				}
 			}
+			var stayNames []string
+			for _, name := range order {
+				if stays[name] {
+					stayNames = append(stayNames, name)
+				}
+			}
 			keptSentence := ""
 			if len(keptNames) == 1 {
 				keptSentence = keptNames[0] + " is left running — it was there before, and `restart:` keeps it up"
 			} else if len(keptNames) > 1 {
 				keptSentence = strings.Join(keptNames, ", ") + " are left running — they were there before, and `restart:` keeps them up"
+			}
+			if len(stayNames) > 0 {
+				verb := "is"
+				if len(stayNames) > 1 {
+					verb = "are"
+				}
+				staySentence := strings.Join(stayNames, ", ") + " " + verb + " left running — recreated in the background by this `up`"
+				if keptSentence != "" {
+					keptSentence += "; "
+				}
+				keptSentence += staySentence
 			}
 			if len(parts) > 0 {
 				if len(left) == 0 && len(unknown) == 0 {
@@ -2624,7 +2667,7 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 		// this list.
 		var survivors []string
 		for _, name := range order {
-			if createdSvc[name] && !kept[name] {
+			if createdSvc[name] && !kept[name] && !stays[name] {
 				continue
 			}
 			info := o.rt.Inspect(o.containerName(name))
@@ -2774,7 +2817,7 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 			Labels:            append(o.labelsTheRuntimeTakes(name, svc.Labels), projectLabel+"="+o.Project.Name),
 			Memory:            mem,
 			CPUs:              cpu,
-			Detach:            detach,
+			Detach:            detach || leftRunning[name],
 			SSH:               svc.SSH,
 			User:              svc.User,
 			WorkingDir:        svc.WorkingDir,
@@ -2794,7 +2837,7 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 		// alone (docker compose parity) — no delete/recreate, so it keeps running
 		// with its state and logs. --force-recreate and a fresh build override this.
 		// A foreground run always recreates: attaching requires a fresh container.
-		if detach && !oneShot[name] && !o.up.forceRecreate && !rebuilt {
+		if (detach || leftRunning[name]) && !oneShot[name] && !o.up.forceRecreate && !rebuilt {
 			if cur := o.rt.Inspect(cname); cur.Exists && cur.State == "running" && cur.Labels[configHashLabel] == hash {
 				o.logf("%s is up to date\n", name)
 				continue
@@ -2960,7 +3003,7 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 				// opossum's own refusal of the file, made before the runtime was called: not a
 				// start that failed, so no advice about logs, the image, the command or the mounts.
 				decoded = fmt.Errorf("starting service %q: %w", name, err)
-			} else if !detach && !madeNothing {
+			} else if !(detach || leftRunning[name]) && !madeNothing {
 				decoded = o.undiagnosedStartError(name, err)
 			} else {
 				decoded = o.decodeStartError(name, order, err)
@@ -2985,6 +3028,13 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 				}
 			}
 			return decoded
+		}
+		// A running dependency this up recreated is up for good, as after `up db`:
+		// the person attached to the one named, and ending that — Ctrl-C, or a
+		// failure of it — is not a reason to take away what was running before it.
+		// The rollback leaves it, its networks and its report to `stays`.
+		if leftRunning[name] {
+			stays[name] = true
 		}
 		// The runtime echoes the container's DNS name (e.g. web.demo.opossum),
 		// which is for container-to-container resolution — not a URL the host can
@@ -6891,13 +6941,66 @@ func (o *Orchestrator) serviceStatuses() (rows []ServiceStatus, notes, unanswere
 		rows = append(rows, ServiceStatus{
 			Service:   name,
 			Container: cname,
-			Image:     image,
+			Image:     psImage(image, info.Image),
 			IP:        info.IP,
 			Ports:     formatPorts(info.Ports),
 			Status:    status,
 		})
 	}
 	return rows, notes, unanswered, nil
+}
+
+// psImage is what the IMAGE column says for a container: the image it is
+// running, which is not always the one the compose file and environment name
+// now — `up` under TAG=3.20 and `ps` from a shell without it are two
+// resolutions of one file. The resolved name is kept when it is the same image
+// the runtime reports (so `image: alpine` still reads `alpine`, not the
+// runtime's `docker.io/library/alpine:latest`), and the runtime's own, with
+// Docker Hub's prefix left off, when it is another. A runtime that gave none
+// leaves the resolved name.
+func psImage(resolved, actual string) string {
+	if actual == "" || canonicalImageRef(resolved) == canonicalImageRef(actual) {
+		return resolved
+	}
+	if hub, ok := strings.CutPrefix(actual, "docker.io/"); ok {
+		if lib, ok := strings.CutPrefix(hub, "library/"); ok && !strings.Contains(lib, "/") {
+			return lib
+		}
+		return hub
+	}
+	return actual
+}
+
+// canonicalImageRef spells an image reference the way the runtime keeps it —
+// registry, repository and tag all written out — so two spellings of one image
+// compare equal: `alpine`, `library/alpine:latest`, `docker.io/alpine` and
+// `docker.io/library/alpine:latest`. The runtime drops the tag of a reference
+// that carries a digest (measured on 1.5.0: `alpine:3.20@sha256:…` is kept as
+// `docker.io/library/alpine@sha256:…`), so the digest alone names the image and
+// the tag is left off here too.
+func canonicalImageRef(ref string) string {
+	name, digest, hasDigest := strings.Cut(ref, "@")
+	first, rest, hasSlash := strings.Cut(name, "/")
+	switch {
+	case !hasSlash:
+		name = "docker.io/library/" + name
+	case first == "docker.io" && !strings.Contains(rest, "/"):
+		name = "docker.io/library/" + rest
+	case !strings.ContainsAny(first, ".:") && first != "localhost":
+		name = "docker.io/" + name
+	}
+	slash := strings.LastIndexByte(name, '/')
+	if colon := strings.IndexByte(name[slash+1:], ':'); colon >= 0 {
+		if hasDigest {
+			name = name[:slash+1+colon]
+		}
+	} else if !hasDigest {
+		name += ":latest"
+	}
+	if hasDigest {
+		return name + "@" + digest
+	}
+	return name
 }
 
 // Ps prints the project's services (see serviceStatuses) as a
