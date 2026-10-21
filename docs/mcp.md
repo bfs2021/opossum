@@ -53,6 +53,8 @@ opossum -f mcp-stack/compose.yaml up          # starts the HTTP servers
 > guest network, so a server can report *connected* while the container can't
 > reach the internet — usually a **wedged default network** after long runtime
 > uptime. Run `opossum doctor` (it probes exactly this) and, if flagged,
-> `container system stop && container system start`.
+> `container system stop && container system start` — after `opossum stop` in
+> each running project, so a database volume isn't left damaged (see
+> [Troubleshooting](troubleshooting.md#if-a-service-doesnt-come-up)).
 
 [← back to the README](../README.md)

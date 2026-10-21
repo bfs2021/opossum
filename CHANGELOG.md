@@ -6,6 +6,12 @@ All notable changes to opossum are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.48.2] - 2026-10-21
+
+### Fixed
+
+- The docs now say to run `opossum stop` in each running project before `container system stop` or any other runtime restart. Stopping the runtime while a MariaDB/MySQL project is still running can leave its volume damaged: the next `up` ends with `OPSM-407` and the database's log shows `Structure needs cleaning` under `/var/lib/mysql`. Measured on container 1.5.0, this happened in 6 of 6 runs with two MariaDB projects, and in none of the 9 runs (those two and a MongoDB project) when `opossum stop` came first. The note is in the troubleshooting page and next to the runtime restart in the MCP guide.
+
 ## [0.48.1] - 2026-10-21
 
 ### Fixed
@@ -2942,7 +2948,8 @@ First tagged release. Everything opossum can do so far.
 - `restart` reassigns a container's IP (the runtime does this on `start`); the
   name and config are preserved, so name-based discovery is unaffected.
 
-[Unreleased]: https://github.com/suruseas/opossum/compare/v0.48.1...HEAD
+[Unreleased]: https://github.com/suruseas/opossum/compare/v0.48.2...HEAD
+[0.48.2]: https://github.com/suruseas/opossum/compare/v0.48.1...v0.48.2
 [0.48.1]: https://github.com/suruseas/opossum/compare/v0.48.0...v0.48.1
 [0.48.0]: https://github.com/suruseas/opossum/compare/v0.47.1...v0.48.0
 [0.47.1]: https://github.com/suruseas/opossum/compare/v0.47.0...v0.47.1
