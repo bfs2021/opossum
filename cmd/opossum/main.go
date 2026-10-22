@@ -593,6 +593,7 @@ func upCmd() *cobra.Command {
 			// (startup order, recreate/skip decisions, and the container commands it
 			// would issue) so the plan can be validated before acting.
 			o.SetDryRun(dryRun)
+			o.SetHostNameCheck(hostNameCheck())
 			// First Ctrl-C cancels the run so a partial `up` rolls back cleanly; a
 			// second one forces an immediate exit (as docker compose does).
 			ctx, cancel := context.WithCancel(context.Background())

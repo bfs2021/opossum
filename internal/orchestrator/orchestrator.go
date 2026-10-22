@@ -55,6 +55,8 @@ type Orchestrator struct {
 	// afterUpLocked is what `up` runs when it is done (whatever it came to), before it lets go of the project's lock: the
 	// start of the restart supervisor, which has to be in place, claimed, before a `down` can be let in (#1740).
 	afterUpLocked func(upErr error)
+	// hostResolves says whether this host can look up a name now. Nil means `up` does not ask (OPSM-216).
+	hostResolves func(name string) bool
 	// imageFactsMemo remembers what each image declared, so planning an overlay asks the
 	// runtime about an image once (its environment and the architectures it has come
 	// from the same inspect), not once for every mount or service that considers it.
@@ -216,6 +218,10 @@ func (o *Orchestrator) SetUpOptions(forceRecreate, build, noBuild, removeOrphans
 // down in between and the supervisor would then claim a project nothing was left in. A dry run takes no lock and runs
 // nothing.
 func (o *Orchestrator) SetAfterUpLocked(f func(upErr error)) { o.afterUpLocked = f }
+
+// SetHostNameCheck sets how a detached `up` asks whether this host can look up the name of a service it started. It is left unset
+// where the host's resolver says nothing about the runtime's names: a stand-in runtime, or a machine with no DNS domain registered.
+func (o *Orchestrator) SetHostNameCheck(f func(name string) bool) { o.hostResolves = f }
 
 // AdoptProjectLock gives `Down` the lock of a project the command took before it read the compose file (HoldProjectLock): `Down` goes on under it where the
 // project it takes down is that one, and takes the lock of another project (the name the file gives) itself. The command releases the one it holds.
@@ -3062,9 +3068,52 @@ func (o *Orchestrator) Up(detach bool, services ...string) (err error) {
 	// catch it) would otherwise leave `up` reporting success over a dead service. A
 	// foreground up blocks on the container, so its exit is already surfaced.
 	if detach {
-		return o.verifyStarted(order, oneShot)
+		if err := o.verifyStarted(order, oneShot); err != nil {
+			return err
+		}
+		o.noteHostNames(order, oneShot)
 	}
 	return nil
+}
+
+// noteHostNames says which of the services a detached `up` just started cannot be looked up by name on this host (OPSM-216).
+// The runtime answers a name it does not know yet with NXDOMAIN and no SOA record, and macOS keeps that for about 75
+// seconds (measured: 74 s on container 1.5.0, whatever `dscacheutil -flushcache` does); a service in the project that asks for
+// a peer before the peer is registered — a backend that connects to its database as it starts — leaves that answer behind, and
+// the name does not resolve until it expires.
+//
+// A note, not a failure: the services are up and the name comes by itself. It is the host's lookup that is asked and not the
+// runtime's own DNS server, because the host's is what is wrong and the runtime's port is its own to choose. Each name is asked
+// once, after verifyStarted has given the services a second: asking again would get the answer macOS is keeping, and a name
+// asked before it is registered is one this lookup would leave behind itself (with OPOSSUM_CRASH_GRACE=0 there is no second, and
+// that is the risk the person took). Asked only where the DNS domain is registered on the host — without it no name resolves, and
+// OPSM-202 has said so; a `network_mode: none` service has no name; a run-to-completion one is gone by now; and a name with upper
+// case or a "." gets no answer for another reason (OPSM-209). After a Ctrl-C it asks nothing: verifyStarted has skipped its second, and the
+// person is not reading a note.
+func (o *Orchestrator) noteHostNames(order []string, oneShot map[string]bool) {
+	if o.hostResolves == nil || o.DNSDomain == "" || o.interrupted() != nil || o.rt.DNSDomainState(o.DNSDomain) != runtime.DNSPresent {
+		return
+	}
+	var missing []string
+	for _, name := range order {
+		svc := o.Project.Services[name]
+		if svc == nil || oneShot[name] || svc.NetworkMode == compose.NetworkModeNone {
+			continue
+		}
+		if name != strings.ToLower(name) || strings.Contains(name, ".") {
+			continue
+		}
+		if !o.hostResolves(o.containerName(name)) {
+			missing = append(missing, o.containerName(name))
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	o.warnf(codeHostNameNotYet, "this host cannot look up %s yet, though the service is running: something asked for the name before it was registered, and macOS keeps that\n"+
+		"         answer for about 75 seconds (measured on container 1.5.0). The name resolves by itself after that — from the host, and for a service of the\n"+
+		"         project that looks it up — so a service that gives up on its first failed connection can need an `opossum restart` of that service once it does.\n",
+		strings.Join(missing, ", "))
 }
 
 // crashGrace is how long verifyStarted gives a service to fall over before `up`

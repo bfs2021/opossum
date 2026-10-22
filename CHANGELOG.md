@@ -6,6 +6,12 @@ All notable changes to opossum are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-10-22
+
+### Added
+
+- `opossum up` now says when the host cannot look up the name of a service it just started (`[OPSM-216]`), though the container is running. The name is asked for before the runtime registers it — a backend that connects to its database as it starts does this — and macOS keeps that "no such name" answer for about 75 seconds (measured on container 1.5.0), so the name does not resolve from the host, or for a service of the project that looks it up in that window, until it expires. `up` still returns 0, does not wait and does not change the order it starts services in; the note names the services affected, and nothing is printed when every name resolves. A service that gives up on its first failed connection may need `opossum restart <service>` once the name resolves.
+
 ## [0.48.2] - 2026-10-21
 
 ### Fixed
@@ -2948,7 +2954,8 @@ First tagged release. Everything opossum can do so far.
 - `restart` reassigns a container's IP (the runtime does this on `start`); the
   name and config are preserved, so name-based discovery is unaffected.
 
-[Unreleased]: https://github.com/suruseas/opossum/compare/v0.48.2...HEAD
+[Unreleased]: https://github.com/suruseas/opossum/compare/v0.49.0...HEAD
+[0.49.0]: https://github.com/suruseas/opossum/compare/v0.48.2...v0.49.0
 [0.48.2]: https://github.com/suruseas/opossum/compare/v0.48.1...v0.48.2
 [0.48.1]: https://github.com/suruseas/opossum/compare/v0.48.0...v0.48.1
 [0.48.0]: https://github.com/suruseas/opossum/compare/v0.47.1...v0.48.0
