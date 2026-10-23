@@ -38,6 +38,7 @@ const RepoURL = "https://github.com/suruseas/opossum"
 var Pages = []string{
 	"getting-started",
 	"compatibility",
+	"compatibility-promise",
 	"networking",
 	"troubleshooting",
 	"benchmarks",

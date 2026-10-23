@@ -329,6 +329,7 @@ file than by a section of this README.
 | | |
 |---|---|
 | [Compatibility](docs/compatibility.md) | The measurement and its method; every compose field and command; where behaviour differs from `docker compose`; reusing images you built with Docker |
+| [Compatibility promise](docs/compatibility-promise.md) | What a script, a CI job or a compose file can rely on across 1.x, and what it can't |
 | [Networking model](docs/networking.md) | How services find each other, running several projects at once, reaching a service from the host |
 | [Troubleshooting](docs/troubleshooting.md) | Build failures on `container`, and the limits worth knowing before you hit them |
 | [Benchmarks](docs/benchmarks.md) | Idle cost, start-up time, and what `stats --host` measures |

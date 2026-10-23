@@ -1,0 +1,50 @@
+OPSM-101 codePGDATADatadir: named volume mounted directly at Postgres's data dir
+OPSM-102 codeSharedVolume: a named volume shared by two running services
+OPSM-103 codeVolumeAttachBusy: a named volume is already attached to another running container
+OPSM-104 codeBindDirCreate: couldn't create a bind mount's host source directory
+OPSM-105 codeBindDataDirChown: a database data directory is a bind mount (can't be chowned)
+OPSM-106 codeHostDeviceMount: a host device or session socket is mounted (a per-container VM has no route to a device node)
+OPSM-107 codeBindFilePlaceholder: a bind mount names a file that doesn't exist, so a directory stands in its place
+OPSM-108 codeVolumeNotSeeded: a fresh volume could not be filled or cleared using the image (no shell to run it with)
+OPSM-109 codeSymlinkedSocket: a bind source is a symlink to a socket, which the runtime refuses to mount
+OPSM-110 codePGVersionedLayout: Postgres 18+ wants the mount one level above the old data directory
+OPSM-111 codeDataDirNotThisMount: the cluster does not land in a mounted data directory, and the overlay left it alone
+OPSM-201 codeHostPortInUse: a published host port is already taken
+OPSM-202 codeDNSDomainAbsent: the DNS domain isn't registered (no bare-name discovery)
+OPSM-203 codeInternalEgress: an internal network: no internet egress / no name resolution
+OPSM-204 codeDockerSocket: a service mounts docker.sock, which does not answer for these containers
+OPSM-205 codeExternalNetAbsent: a network declared external: true doesn't exist
+OPSM-206 codeHostPortRemapped: a container-only port's mirrored host port was not available, so opossum picked a free one and said why
+OPSM-207 codeNetworkSubnetChanged: the project network exists with a subnet other than the one `ipam` now declares, or host-only where the file says not (or the other way round)
+OPSM-208 codeProjectBusy: another opossum command holds the project's lock (an `up` or `down` is under way)
+OPSM-209 codeServiceNameUnresolvable: a service's name can't be looked up by its peers (upper case or ".")
+OPSM-210 codeExternalVolumeAbsent: a volume declared external: true doesn't exist
+OPSM-211 codeSecondNetworkName: a service on two networks answers by name with its first network's address only
+OPSM-212 codeHostPortNotPlaced: a container-only port's mirrored host port was not available and no free host port clear of the file's own was found
+OPSM-213 codeHostPortTwice: two entries of this run publish the same host port
+OPSM-214 codeHostAddressUnbindable: a published entry names a host address this machine will not bind
+OPSM-215 codeHostPortNotBindable: a published host port was refused for a reason other than a listener (a port below 1024 on a specific address takes root)
+OPSM-216 codeHostNameNotYet: a running service's name cannot be looked up on this host: something asked for it before it was registered and macOS keeps that answer
+OPSM-401 codeDepNotRunning: a dependency's container exited before becoming healthy
+OPSM-402 codeOrphans: containers left by services no longer in the compose
+OPSM-403 codeDepNoHealth: a service_healthy dependency defines no healthcheck
+OPSM-404 codeRuntimeAbsent: the `container` CLI isn't installed / not on PATH
+OPSM-405 codeRuntimeStopped: the `container` system (daemon) is installed but not running
+OPSM-406 codeRuntimeAutoStart: the runtime wasn't running; opossum is starting it
+OPSM-407 codeServiceExited: a service's container exited right after starting (no health gate)
+OPSM-408 codeSupervisorStarted: a per-project supervisor is watching `restart:` services
+OPSM-409 codeSupervisorAction: the supervisor restarted a service, gave up on one, or left a container that is another project's
+OPSM-410 codeSupervisorLogTrimmed: the supervisor's log hit its size cap and lost its older half
+OPSM-411 codeSupervisorLogUncapped: the supervisor could not open a size-capped log and is writing without a bound
+OPSM-412 codeImageNoArm64: the image has no arm64 build, so the container cannot start here
+OPSM-413 codeOptionalDependency: a `required: false` dependency did not become healthy or did not complete; the dependent starts anyway
+OPSM-414 codeSupervisorStopFailed: asked the restart supervisor to stop but couldn't confirm it did within budget, or could not check it (`ps` would not answer) and did not ask
+OPSM-415 codeRegistryRefused: the runtime refuses to pull from this registry (lscr.io), where docker compose does not
+OPSM-416 codeProgramWrongArch: the kernel could not run what a service starts (`Exec format error`): a program built for another CPU architecture than the image's, or a script with no `#!` line
+OPSM-501 codeIgnoredTopField: unsupported top-level compose field(s), ignored
+OPSM-502 codeIgnoredField: unsupported service compose field(s), ignored
+OPSM-601 codeWatchRebuild: a `watch` rebuild action failed
+OPSM-602 codeWatchRestart: a `watch` restart action failed, or was skipped because the runtime would not say which project owns the container
+OPSM-603 codeWatchSync: a `watch` file sync failed, or was skipped because the container belongs to another project or the runtime would not say whose it is
+OPSM-604 codeWatchSetup: `watch` couldn't start watching a path
+OPSM-605 codeWatchError: the `watch` file watcher reported an error

@@ -344,6 +344,39 @@ func TestAnEntryWhosePortIsHeldOnItsOwnAddressStillMoves(t *testing.T) {
 	}
 }
 
+// holdAPortOn holds a port on 127.0.0.1 on udp or tcp and returns it with the call that lets it go. A tcp hold is for a
+// row that needs the same number free on udp, and the number the machine hands out is another process's on udp now and
+// then (a shared runner has services of its own), so a number that is not free there is let go and another is asked
+// for, a few times; udp is not asked the same, because a udp hold is the row where udp is taken.
+func holdAPortOn(t *testing.T, udp bool) (port int, release func()) {
+	t.Helper()
+	if udp {
+		c, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("this machine would not bind udp on 127.0.0.1: %v", err)
+		}
+		return c.LocalAddr().(*net.UDPAddr).Port, func() { c.Close() }
+	}
+	const attempts = 20
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("this machine would not bind tcp on 127.0.0.1: %v", err)
+		}
+		port = l.Addr().(*net.TCPAddr).Port
+		c, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			c.Close()
+			return port, func() { l.Close() }
+		}
+		lastErr = err
+		l.Close()
+	}
+	t.Fatalf("no tcp port free on udp as well in %d tries, the last (%d) said %v", attempts, port, lastErr)
+	return 0, nil
+}
+
 // The protocol is asked about too: a host port is in use per protocol as well as
 // per address, and `8080/tcp` and `8080/udp` are two ports. Both rows are needed
 // because dropping the protocol from the question goes wrong in both directions —
@@ -365,22 +398,8 @@ func TestTheProtocolOfTheEntryIsAskedAboutToo(t *testing.T) {
 		{"a udp hold is", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var port int
-			if tc.holdUdp {
-				c, err := net.ListenPacket("udp", "127.0.0.1:0")
-				if err != nil {
-					t.Fatalf("this machine would not bind udp on 127.0.0.1: %v", err)
-				}
-				defer c.Close()
-				port = c.LocalAddr().(*net.UDPAddr).Port
-			} else {
-				l, err := net.Listen("tcp", "127.0.0.1:0")
-				if err != nil {
-					t.Fatalf("this machine would not bind tcp on 127.0.0.1: %v", err)
-				}
-				defer l.Close()
-				port = l.Addr().(*net.TCPAddr).Port
-			}
+			port, release := holdAPortOn(t, tc.holdUdp)
+			defer release()
 			// Why this row is what it is: the port has to be free on the OTHER
 			// protocol, or "left alone" and "moved" would not separate the two.
 			if c, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {

@@ -1,0 +1,32 @@
+# What opossum promises across 1.x
+
+This page says what a script, a CI job or a compose file can rely on staying the
+same from one 1.x release to the next, and what it can't. Each row of
+"Promised" names what keeps the promise today. Where nothing does, the row says
+so: that is a promise still to be backed by a test, or dropped, and not one that
+is already kept.
+
+[← back to the README](../README.md)
+
+## Promised
+
+| What | The promise | What keeps it today |
+|---|---|---|
+| Commands and flags | A command, alias or flag that exists in 1.0 is not removed or renamed, keeps its type and its default, and keeps its meaning. A new one may be added. A change that must go is announced as deprecated for at least one minor release first. | `TestCLICommandsAndFlagsAreTheRecordedOnes` compares every visible command, alias and flag (name, short form, type, default) with a recording in `cmd/opossum/testdata/cli-inventory.txt`: a line that goes is a failure, a line that is added is not. The recording is only ever added to by the update, so taking a line out is a visible edit. The deprecation notice itself is not checked. |
+| Exit codes | `0` is success. `1` is a failure of opossum itself. `run` and `exec` exit with the command's own code, as docker compose does. `130` and `129` are a Ctrl-C and a hangup. `opossum doctor` exits non-zero when it finds a problem, whatever `--format` is. | `TestRunAndExecExitWithTheContainersCode` (the code passed through, and the rows that must stay `1`). `TestLogsCLIExits130OnCtrlC` keeps the `130` of `logs`, and `TestDoctorExitsNonZeroWhenUnhealthy` keeps `doctor`'s. No single test holds the whole list. |
+| `OPSM-NNN` numbers | A number is not reused for another message and is not removed. The wording of the message, and which situation a number is shown in, may change; scripts should match the number, and a number that is no longer shown is not an error. New numbers may be added. | `TestDiagCodesDocumentedInAgentsMd`, `TestNoPhantomDiagCodesInAgentsMd` and `TestCodesAreEmittedFromConstantsNotLiterals` keep every number declared, documented and emitted from one place. `TestDiagCodesAreTheRecordedOnes` compares each number, the constant that carries it and the situation it is shown in with a recording in `internal/orchestrator/testdata/diag-codes.txt`: a number that goes, or is given to another situation, is a failure; a new number is not. The recording is only ever added to by the update, so taking a line out is a visible edit. It fails on a reworded situation too, which is stricter than the promise needs. |
+| `--format json` | The fields `ps`, `images`, `stats --no-stream`, `volumes`, `ls` and `doctor` print under `--format json` stay, with the same meaning and type. A field may be added; a script has to ignore the ones it doesn't know. | Each is held by a test that compares the exact output or the exact key set: `TestFormatJSONCLI` (`ps`, `images`, `stats`, against the table for the same project), `TestVolumesCLI`, `TestLsCLI`, and `TestRunJSONShape` for `doctor` (the check ids and the four keys of each). These tests also fail when a field is *added*, so a release that adds one updates them on purpose; that is a stricter check than the promise needs. |
+| A compose file that worked | A compose file that `up` ran in one 1.x release runs in the next, with the same services started in the same order. A field opossum now ignores may start to be read; a field it reads is not dropped. | The compose-file tests (`composefile_test.go`, the interpolation, `env_file`, profile and override matrices) and the corpus on [Compatibility](compatibility.md), which was first measured in October 2026 on v0.47.0. Before a minor release is cut, the files in the corpus are run again, to see that none that worked before has stopped working. That is a check made by hand for each minor release, not a test that runs on every change, and a patch release is not re-measured. A file outside both is not held by anything. |
+| State on disk | The project's files stay where they are: `.opossum/` and the generated `compose.opossum.yaml` in the project directory, `.opossum-snapshots/` beside a snapshotted directory, and the lock, the restart supervisor's pid and watch list, and the `content:` and `environment:` config files under `$XDG_STATE_HOME/opossum/<project>/` (`~/.local/state` by default). A release does not move them, and `destroy` removes what opossum created and nothing else. A newer release reads what an older one wrote. | `TestAStateTheEarlierReleaseWroteIsStillRead` reads the files a v0.49.0 `up` left (kept as they were in `internal/orchestrator/testdata/state-v0.49.0`), and `TestALiveSupervisorTheEarlierReleaseStartedIsStillFound` finds a running supervisor from a pid file in the format that release wrote. Files written by a release before v0.49.0 are not kept as a fixture. `destroy` has tests of its own. |
+
+## Not promised
+
+| What | Why |
+|---|---|
+| The text of a message, a table's columns and spacing, the order of lines | They are for people. Match an `OPSM` number or use `--format json`. |
+| Which `container` and macOS versions work | opossum follows [Apple's `container`](https://github.com/apple/container), which still ships new minor versions often. The README names the versions this release was checked against; a new `container` release may need a new opossum release, and an old one may stop being supported. |
+| The fake runtime and its flags (`OPOSSUM_CONTAINER_BIN`, the shell stand-in under `testdata/`) | They exist to test opossum. They are not an interface. |
+| The differences from docker compose that [Compatibility](compatibility.md) lists | Each is a known gap, not a behaviour to rely on. A release may close one, and a file that depended on the gap may then behave differently. |
+| Names and ids of the containers, networks and volumes opossum creates | The `opossum.project` label and the names `ps` prints are what to look for. How a name is put together may change. |
+| Timings: how long `up` waits, how long a name takes to resolve | They depend on the runtime and the Mac (see [Troubleshooting](troubleshooting.md)). |
+| Anything an environment variable called `OPOSSUM_*` does that the README doesn't name | Those are for testing and debugging. |

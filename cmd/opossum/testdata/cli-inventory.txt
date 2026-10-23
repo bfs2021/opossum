@@ -1,0 +1,84 @@
+opossum
+opossum --dns-domain string = opossum
+opossum --env-file stringArray = []
+opossum --file -f stringArray = []
+opossum --profile stringArray = []
+opossum --project-name -p string = 
+opossum --verbose bool = false
+opossum --version -v bool = false
+opossum build
+opossum config
+opossum config --services bool = false
+opossum cp
+opossum destroy
+opossum destroy --dry-run bool = false
+opossum destroy --force bool = false
+opossum destroy --keep-images bool = false
+opossum destroy --keep-local bool = false
+opossum destroy --keep-overlay bool = false
+opossum doctor
+opossum doctor --fix bool = false
+opossum doctor --format string = text
+opossum down
+opossum down --remove-orphans bool = false
+opossum down --rmi string = 
+opossum down --volumes -v bool = false
+opossum exec
+opossum exec --interactive -i bool = false
+opossum exec --tty -t bool = false
+opossum images
+opossum images --format string = table
+opossum import
+opossum kill
+opossum kill --signal -s string = 
+opossum logs
+opossum logs --follow bool = false
+opossum logs --no-log-prefix bool = false
+opossum logs --tail -n int = 0
+opossum ls
+opossum ls --all -a bool = false
+opossum ls --format string = table
+opossum ls --quiet -q bool = false
+opossum port
+opossum port --protocol string = tcp
+opossum ps
+opossum ps --format string = table
+opossum pull
+opossum restart
+opossum run
+opossum run --audit bool = false
+opossum run --audit-format string = text
+opossum run --no-deps bool = false
+opossum run --no-tty -T bool = false
+opossum run --rm bool = false
+opossum run --ssh bool = false
+opossum start
+opossum stats
+opossum stats --format string = table
+opossum stats --host bool = false
+opossum stats --no-stream bool = false
+opossum stop
+opossum up
+opossum up --build bool = false
+opossum up --dry-run bool = false
+opossum up --force-recreate bool = false
+opossum up --foreground bool = false
+opossum up --from-docker-compose bool = false
+opossum up --no-build bool = false
+opossum up --no-supervisor bool = false
+opossum up --remove-orphans bool = false
+opossum volumes
+opossum volumes --format string = table
+opossum volumes --quiet -q bool = false
+opossum watch
+opossum ws
+opossum ws --path string = ./work
+opossum ws ls
+opossum ws ls alias list
+opossum ws prune
+opossum ws prune --all bool = false
+opossum ws prune --keep int = 0
+opossum ws rm
+opossum ws rm alias remove
+opossum ws rollback
+opossum ws snapshot

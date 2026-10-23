@@ -6,6 +6,12 @@ All notable changes to opossum are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-24
+
+### Added
+
+- A new page, [What 1.x keeps and what it doesn't](https://github.com/suruseas/opossum/blob/main/docs/compatibility-promise.md), says what opossum promises to keep between 1.x releases: the commands and flags, the exit codes, the `OPSM-NNN` numbers, the fields printed under `--format json`, a compose file that worked, and the state it keeps on disk. For each promise the page names the tests that keep it, and says so where nothing does; it also lists what is not promised, such as the wording of a message or the columns of a table.
+
 ## [0.49.0] - 2026-10-22
 
 ### Added
@@ -2954,7 +2960,8 @@ First tagged release. Everything opossum can do so far.
 - `restart` reassigns a container's IP (the runtime does this on `start`); the
   name and config are preserved, so name-based discovery is unaffected.
 
-[Unreleased]: https://github.com/suruseas/opossum/compare/v0.49.0...HEAD
+[Unreleased]: https://github.com/suruseas/opossum/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/suruseas/opossum/compare/v0.49.0...v1.0.0
 [0.49.0]: https://github.com/suruseas/opossum/compare/v0.48.2...v0.49.0
 [0.48.2]: https://github.com/suruseas/opossum/compare/v0.48.1...v0.48.2
 [0.48.1]: https://github.com/suruseas/opossum/compare/v0.48.0...v0.48.1

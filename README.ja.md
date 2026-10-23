@@ -231,6 +231,7 @@ opossum が扱う／無視する／拒否する compose フィールドの全て
 | | |
 |---|---|
 | [Compatibility](docs/compatibility.md) | 実測とその方法、compose フィールドとコマンドの全一覧、`docker compose` との挙動差、Docker でビルドしたイメージの再利用 |
+| [Compatibility promise](docs/compatibility-promise.md) | 1.x の間、スクリプトや CI や compose file が頼ってよいこと、頼れないこと（英語） |
 | [Networking model](docs/networking.md) | サービス同士の到達方法、複数プロジェクトの同時実行、ホストからの到達 |
 | [Troubleshooting](docs/troubleshooting.md) | `container` でのビルド失敗と、踏む前に知っておく価値のある制限 |
 | [Benchmarks](docs/benchmarks.md) | アイドル時のコスト、起動時間、`stats --host` が測っているもの |
