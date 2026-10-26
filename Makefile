@@ -98,22 +98,17 @@ test: wired ## run the full test suite (the regression gate)
 	go run ./cmd/noleftovers go test ./cmd/busy -race -cover -count=1
 	@case "$$TMPDIR" in /tmp/opossum-test-*) rm -rf "$$TMPDIR" ;; esac
 
-# The gate for a copy of this repository that carries the product and not the
-# workshop: the packages the released binary links, and nothing else. Asked
-# of the compiler rather than listed here, so that a package added to the
-# binary is tested without anyone remembering to add it. The gate command
+# The narrower gate: the packages the released binary links, and nothing
+# else. Asked of the compiler rather than listed here, so that a package added
+# to the binary is tested without anyone remembering to add it. The gate command
 # itself is the whole claim and is pinned as one line (the mkdir/rm around
 # it, #1238, are this run's own housekeeping, not the claim), because a grep
 # narrowed by a character tests a fraction of the binary and still prints
 # `ok` for each package it did run.
 #
-# What is left out is this repository's tooling — the checks that read
-# CONTRIBUTING.md, the changelog fragments and the notes from real-runtime
-# review. A published copy has none of those three: the release that writes
-# it folds the fragments into a version's section, and the contributor
-# guidance and the review notes live where the work happens. (The release
-# config is published, so it is not one of them.) Running those checks there
-# asks whether files that were never meant to be shipped are in order.
+# What is left out is this repository's tooling — the checks of the
+# changelog fragments, the workflow and the repository's own files. CI runs the whole of `make test`; this is the narrower gate for
+# asking only about what ships.
 test-shipped: wired ## run the tests of the packages the released binary links
 	@case "$$TMPDIR" in /tmp/opossum-test-*) mkdir -p "$$TMPDIR" ;; esac
 	go run ./cmd/noleftovers go test $$(go list -deps ./cmd/opossum | grep '^github.com/suruseas/opossum') -race -cover -count=1

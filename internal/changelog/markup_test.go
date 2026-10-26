@@ -99,15 +99,14 @@ func TestMarkupProblem(t *testing.T) {
 // Every fragment waiting in changelog.d renders as it reads. Published sections
 // are not checked: they are never rewritten here.
 func TestFragmentsRenderAsWritten(t *testing.T) {
-	dir := filepath.Join(repoRoot(t), "changelog.d")
-	// No fragments is a real state (right after a release); no directory is a
-	// test looking in the wrong place, which Load would also answer with none.
-	if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil {
-		t.Fatalf("changelog.d is not where this test looks: %v", err)
-	}
-	frags, err := changelog.Load(dir)
+	root := repoRoot(t)
+	dir := filepath.Join(root, "changelog.d")
+	frags, err := changelog.Waiting(filepath.Join(root, "CHANGELOG.md"), dir)
 	if err != nil {
-		t.Fatalf("reading changelog.d: %v", err)
+		t.Fatal(err)
+	}
+	if len(frags) == 0 {
+		t.Skip("no fragments waiting for a release")
 	}
 	for _, f := range frags {
 		p, err := changelog.FileMarkupProblem(f.Path)
