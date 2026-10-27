@@ -261,21 +261,13 @@ docker compose と同じ意味で読みます。
 
 ## 開発
 
-```sh
-make test
-
-# fake shim を使うと、実ランタイムなしでオーケストレーションをスモークテストできます：
-OPOSSUM_CONTAINER_BIN="$PWD/testdata/fake-container.sh" \
-  go run ./cmd/opossum -f examples/compose.yaml up
-```
-
-ユーザに見える変更は [`CHANGELOG.md`](CHANGELOG.md) にまとめています（英語）。
+開発環境の準備、テストの走らせ方（fake のランタイムで走るので Apple `container` は不要です）、PR の送り方は [`CONTRIBUTING.md`](CONTRIBUTING.md)（英語）にまとめています。ユーザに見える変更は [`CHANGELOG.md`](CHANGELOG.md) にまとめています（英語）。
 
 `OPOSSUM_CONTAINER_BIN` は、ランタイムとして呼び出すバイナリを上書きします。fake shim の出力は実際の CLI と同期を保っています（[`testdata/real-cli-output.md`](testdata/real-cli-output.md) 参照）。
 
 ## opossum の開発体制
 
-opossum は主に自律型の AI コーディングエージェントが開発しています。エージェントが計画・実装・テスト・レビュー・マージまでを行い、人間が方向性を決めてリリースを承認します。
+opossum は主に自律型の AI コーディングエージェントが開発しています。エージェントが計画・実装・テストを行い、取り込む前に独立したレビューを通します。人間のメンテナが方向性を決め、すべての pull request をマージし、リリースの時期を決めます。
 
 ## ライセンス
 
