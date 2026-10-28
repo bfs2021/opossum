@@ -5,7 +5,32 @@ stdout+stderr と exit code の golden。`testdata/fake-container.sh` はこれ�
 返し、`internal/runtime/runtime_test.go` の忠実性 eval はこの文字列を各パーサに流して
 整合を確認する。**CLI 更新時はここを再採取して同期すること。**
 
-**最終検証: 2026-10-01 / `container CLI version 1.5.0`（Homebrew formula `1.5.0`）。**
+**Last verified: 2026-10-28 / `container CLI version 1.6.1` (Homebrew formula `1.6.1`), macOS 27.0.1.**
+The commands the parsers read were re-captured on 1.6.1 with the same script as for 1.5.0, plus a few new
+captures (raw output in `~/opossum-dogfood/results/v161-recapture/`, 71 files) and compared with the 1.5.0 files.
+The sections below were not rewritten; what changed is listed here.
+
+**What changed from 1.5.0 to 1.6.1:**
+- Of the 63 files 1.5.0 also has, none changed exit code but the two cleanup steps, which named a container the
+  new alias capture had failed to create. No key opossum reads is gone. `make real-conformance` passes (3 tests). The example
+  projects run `config → up → ps → logs → down -v` clean.
+- `opossum config`, `up`, `ps`, `images`, `doctor` and `down -v` print the same as on 1.5.0 apart from counts
+  and the version.
+- `inspect` adds `variant` (`v8`) beside a container's image `architecture`/`os`. opossum reads only `architecture`.
+- `container --help` lists `build` and `builder` at the end (they are plugins now); `k8s` is now `cluster`.
+- An image with no arm64 build runs without `--platform` (the platform now comes from the image). On 1.5.0,
+  `container run --rm <amd64-only image> true` failed with `Error: platform linux/arm64`. A pull limited to
+  `linux/arm64` of such an image still fails, with `does not support required platforms`.
+- `container logs -f` of a running container that has written nothing keeps following (1.4.1 returned at once).
+- `container stop` of a process that ignores TERM took 8.2 s (one run; 5.35 s on 1.5.0).
+- `--network <name>,alias=NAME` is new. An alias needs at least two labels unless a default DNS domain is set:
+  `Error: alias "x" must be a fully qualified name with at least 2 labels, such as "api.example.test". …`
+- Still no exit code for a stopped container in `inspect` or `ls -a`. `container start --attach` on a stopped
+  container runs it again and exits with the new run's code.
+- Not measured on 1.6.1: `system status` with the apiserver down (1.6.1 changed how it asks launchd), and the
+  sections the 1.5.0 list below names as not measured.
+
+**1.5.0 の検証: 2026-10-01 / `container CLI version 1.5.0`（Homebrew formula `1.5.0`）。**
 1.5.0 では、パーサが読むコマンドを実機で採り直した（生出力は `~/opossum-dogfood/results/v150-recapture/`、72 ファイル、
 1.4.1 と同じ範囲）。**採り直したのは 1.4.1 の節の一部で、それ以外の節は 1.4.1（または初出の版）の採取のまま**
 （下の「1.4.1 → 1.5.0 で変わったもの」に、1.5.0 で変わったものと未測定の節を挙げる）。
